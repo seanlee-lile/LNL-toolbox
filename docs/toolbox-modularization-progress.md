@@ -1,5 +1,27 @@
 # Toolbox modularization progress
 
+## Config path decoupling — catalog-driven wizard membership
+
+Base: `code@993e18a78e82d48acea12b92801ee580c2189bfb`.
+The source wizard takes built-in templates in catalog order, filtering
+for editable non-conditional CIFAR configurations instead of their
+directory. Clean retains four registered templates; generic narrows
+from 30 to six rather than treating absent top-level models as TinyCNN.
+Official defaults are unchanged. Local browsing is separate and direct
+YAML, dedicated producers, and installed discovery are unchanged.
+No YAML moves or manifest changes are included.
+
+- Focused: 15 passed. Main: 1186 passed / 21 skipped; Web: 110 passed /
+  31 skipped; Scratch: 196 passed / 10 skipped. No failures or errors.
+- Both isolated wheel and sdist-derived installations passed discovery,
+  manual wizard file selection, and one file-list read per installed index.
+  The frozen baseline matches: 68 recipes, 71 packaged YAMLs, 26 Papers,
+  56 associations, 26 defaults, and discovery 63 / 4 / 68 / 4.
+  Normalized config hashes, Sweep identity, and Resume behavior are unchanged.
+- Complete (5/5: eligibility audit, implementation, focused tests, full
+  suites, installed verification). Await review; no stage, commit, push,
+  or YAML moves.
+
 ## Config path decoupling — legacy wizard defaults
 
 Base: `code@fc75f39b9bd8ee9194f7c7f230d9ddbcc0d2bf23`.

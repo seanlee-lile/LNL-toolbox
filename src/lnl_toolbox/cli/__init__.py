@@ -215,62 +215,101 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return dict(value)
 
 
-def _eligible_template(path: Path, *, clean: bool) -> dict[str, Any] | None:
+def _template_mapping(path: Path) -> dict[str, Any] | None:
+    from yaml import YAMLError
+
     try:
-        config = _load_yaml_mapping(path)
-    except (OSError, ValueError):
+        return _load_yaml_mapping(path)
+    except (OSError, ValueError, YAMLError):
         return None
-    model_name = str(config.get("model", {}).get("name", "tiny_cnn")).lower()
+
+
+def _legacy_template_eligible(config: Mapping[str, Any], *, clean: bool) -> bool:
+    if config.get("kind", "experiment") != "experiment":
+        return False
+    model = config.get("model", {})
+    if not isinstance(model, Mapping):
+        return False
+    model_name = str(model.get("name", "tiny_cnn")).lower()
     if clean and config.get("noise"):
-        return None
-    return config if clean or model_name == "tiny_cnn" else None
+        return False
+    return clean or model_name == "tiny_cnn"
 
 
-def _experiment_templates(*, clean: bool) -> list[tuple[Path, dict[str, Any]]]:
-    directories = [Path.cwd() / "configs" / "experiment", repository_root() / "configs" / "experiment"]
-    discovered: dict[Path, dict[str, Any]] = {}
-    for directory in directories:
-        if not directory.is_dir():
+def _catalog_template_eligible(config: Mapping[str, Any], *, clean: bool) -> bool:
+    from lnl_toolbox.training.runners import resolve_runner
+
+    data, model = config.get("data"), config.get("model")
+    if config.get("kind", "experiment") != "experiment" or not isinstance(data, Mapping):
+        return False
+    if data.get("name") not in ("cifar10", "cifar100") or not isinstance(model, Mapping):
+        return False
+    model_name = model.get("name")
+    if clean:
+        if config.get("noise") or model_name not in ("tiny_cnn", "resnet18", "preact_resnet18"):
+            return False
+    elif model_name != "tiny_cnn":
+        return False
+    try:
+        runner = resolve_runner(config).name
+    except (TypeError, ValueError):
+        return False
+    return runner in ("clean", "supervised") if clean else runner == "supervised"
+
+
+def _experiment_templates(*, clean: bool) -> tuple[list[Path], dict[str, Path]]:
+    """Find project-local files separately from ordered built-in wizard templates."""
+    from lnl_toolbox.catalog import _source_wizard_recipes
+
+    root, cwd = repository_root().resolve(), Path.cwd().resolve()
+    try:
+        source_recipes = _source_wizard_recipes(root)
+    except (OSError, ValueError, KeyError, TypeError):
+        # A broken built-in manifest must not disable browsing arbitrary YAML.
+        source_recipes = {}
+    registered = {path for path, _ in source_recipes.values()}
+    builtin: dict[str, Path] = {}
+    for recipe_id, (path, conditional) in source_recipes.items():
+        if conditional:
             continue
-        for path in sorted(directory.glob("*.yaml")):
-            resolved = path.resolve()
-            if resolved in discovered:
-                continue
-            config = _eligible_template(resolved, clean=clean)
-            if config is not None:
-                discovered[resolved] = config
-    return list(discovered.items())
+        config = _template_mapping(path)
+        if config is not None and _catalog_template_eligible(config, clean=clean):
+            builtin[recipe_id] = path
+
+    local: dict[Path, None] = {}
+    directory = cwd / "configs" / "experiment"
+    for candidate in sorted(directory.glob("*.yaml")):
+        path = candidate.resolve()
+        if path in registered or path in local:
+            continue
+        config = _template_mapping(path)
+        if config is None or not _legacy_template_eligible(config, clean=clean):
+            continue
+        # Avoid offering dedicated support configs from this checkout as editable
+        # templates. Independent projects retain their legacy browsing rules.
+        if cwd == root and not _catalog_template_eligible(config, clean=clean):
+            continue
+        local[path] = None
+    return list(local), builtin
 
 
 def _choose_template(session: PromptSession, *, clean: bool) -> tuple[Path, dict[str, Any]]:
-    from lnl_toolbox.catalog import _source_recipe_path
-
-    templates = _experiment_templates(clean=clean)
+    local_paths, builtin = _experiment_templates(clean=clean)
     root, cwd = repository_root().resolve(), Path.cwd().resolve()
-    paths = {path for path, _ in templates}
     recipe_id = "cifar10-clean-smoke" if clean else "cifar10-smoke"
     # Preserve the legacy override for a user project, not for the official default.
     legacy_name = "cifar10_clean_smoke.yaml" if clean else "cifar10_smoke.yaml"
     local = (cwd / "configs" / "experiment" / legacy_name).resolve()
-    default = local if cwd != root and local.name == legacy_name and local in paths else None
-    try:
-        official = _source_recipe_path(recipe_id, root)
-    except (OSError, ValueError, KeyError, TypeError):
-        # A broken built-in manifest must not disable browsing arbitrary YAML.
-        official = None
-    if official is not None:
-        if official not in paths:
-            config = _eligible_template(official, clean=clean)
-            if config is not None:
-                templates.append((official, config))
-                paths.add(official)
-        if default is None and official in paths:
-            default = official
+    default = builtin.get(recipe_id)
+    if cwd != root and local.name == legacy_name and local in local_paths:
+        default = local
+    templates = [(f"[本地] {path.name}", path) for path in local_paths]
+    templates.extend((f"[内置] {key}", path) for key, path in builtin.items())
     if templates:
         path = session.choose(
             "选择实验配置模板",
-            [(item.name, item) for item, _ in templates],
-            default=default if default is not None else templates[0][0],
+            templates,
+            default=default if default is not None else templates[0][1],
         )
     else:
         selected = session.path("实验 YAML 路径", required=True, must_exist=True, file_only=True)

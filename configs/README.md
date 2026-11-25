@@ -29,7 +29,9 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 移动内置 YAML 时，仍须同步 manifest 的资源路径、打包声明和适用的 `public` / `conditional` 路径引用，并核对直接 `--config` 示例、旧交互菜单及 packaged-only producer 等特定路径消费者。公开菜单和条件配方仍按路径登记，在主 `recipes` 顺序上做筛选。
 
-旧 CLI 交互向导的官方默认模板按内置 ID 查找源码 YAML：clean 用 `cifar10-clean-smoke`，通用训练用 `cifar10-smoke`。已有菜单仍扫描当前目录和仓库的 `configs/experiment/*.yaml`，保留独立用户项目中可用的同名本地模板优先、首项回退和无候选时的手输路径。若官方模板移出旧扫描目录，仅补入这一项；其他内置模板不会自动加入。独立安装不从包内自动填入交互模板；`--recipe` 和显式 `--config` 不受此约定影响。
+旧 CLI 交互向导会重写训练参数，内置菜单只从源码 catalog 按顺序提供适合编辑的 CIFAR-10/100 模板。Clean 向导接受无噪声、模型受支持的 clean/supervised 配置；通用向导要求 supervised runner 和显式顶层 TinyCNN；两者均不自动纳入 conditional 配方。默认 ID 仍是 `cifar10-clean-smoke` 和 `cifar10-smoke`。完整论文及多阶段实验请用 `lnl run --recipe <id>`，不要用向导代替原配方。
+
+向导另从当前项目的 `configs/experiment/*.yaml` 发现本地文件，保留独立用户项目的同名优先与无候选时的手输路径。源码根目录中的未登记文件只有符合向导资格才会显示为本地项；这避免将专用工作流和测试配置混入普通模板。Producer 用专用入口运行；packaged-only 辅助配置、开发例与任意自定义 YAML 可按路径使用。独立安装不自动从包内填充向导菜单；`--recipe` 和显式 `--config` 不受影响。
 
 **GCE（现有 loss 和 runner）。** 参考 `experiment/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
 

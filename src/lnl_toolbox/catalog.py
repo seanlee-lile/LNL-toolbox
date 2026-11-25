@@ -196,16 +196,17 @@ def _recipe_manifest() -> tuple[
     return entries, frozenset(conditional), public
 
 
-def _source_recipe_path(recipe_id: str, root: Path) -> Path | None:
-    """Locate one canonical source template without probing installed resources."""
+def _source_wizard_recipes(root: Path) -> dict[str, tuple[Path, bool]]:
+    """Return ordered source paths and conditional flags without loading an index."""
     if not (root / "configs").is_dir():
-        return None
-    entries, _, _ = _recipe_manifest()
-    matches = [entry for entry in entries if entry.id == recipe_id]
-    if len(matches) != 1:
-        return None
-    path = (root / matches[0].path).resolve()
-    return path if path.is_file() else None
+        return {}
+    entries, conditional, _ = _recipe_manifest()
+    result: dict[str, tuple[Path, bool]] = {}
+    for entry in entries:
+        if entry.id in result:
+            raise ValueError(f"duplicate canonical recipe ID {entry.id!r}")
+        result[entry.id] = ((root / entry.path).resolve(), entry.path in conditional)
+    return result
 
 
 def _installed_distribution(relative: str) -> metadata.Distribution:

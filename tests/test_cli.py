@@ -21,8 +21,24 @@ def _cli_scripted_session(values: list[str]) -> tuple[PromptSession, list[str]]:
 class _cli_PromptSessionTest(unittest.TestCase):
 
     def test_clean_template_discovery_excludes_noisy_configs(self) -> None:
-        names = {path.name for path, _ in cli_shared._experiment_templates(clean=True)}
-        self.assertNotIn('cifar10_symmetric_ce_smoke.yaml', names)
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(Path, "cwd", return_value=Path(directory)):
+            local, builtin = cli_shared._experiment_templates(clean=True)
+        self.assertEqual(local, [])
+        self.assertEqual(list(builtin), [
+            "cifar10-clean", "cifar10-clean-baseline", "cifar10-clean-smoke", "cifar10-smoke",
+        ])
+
+    def test_generic_builtin_template_membership_and_catalog_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(Path, "cwd", return_value=Path(directory)):
+            local, builtin = cli_shared._experiment_templates(clean=False)
+        self.assertEqual(local, [])
+        self.assertEqual(list(builtin), [
+            "cifar10-foundation-smoke", "cifar10-smoke", "cifar10-symmetric-cdr-smoke",
+            "cifar10-symmetric-ce-smoke", "cifar10-symmetric-small-loss-linear-smoke",
+            "cifar10-symmetric-small-loss-smoke",
+        ])
 
     def test_official_wizard_defaults_follow_recipe_id_without_changing_local_choices(self) -> None:
         for clean, recipe_id, filename in (
@@ -37,12 +53,12 @@ class _cli_PromptSessionTest(unittest.TestCase):
                 ordinary = cwd / "configs/experiment/a_local.yaml"
                 repo_other = repo / "configs/experiment/a_repo.yaml"
                 filtered = cwd / "configs/experiment/z_filtered.yaml"
-                for path in (original, shadow, ordinary, repo_other, filtered):
+                template = "data: {name: cifar10}\nmodel: {name: tiny_cnn}\n"
+                for path in (original, ordinary, repo_other, filtered):
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text("model: {name: tiny_cnn}\n", encoding="utf-8")
+                    path.write_text(template, encoding="utf-8")
                 other_config = "noise: {name: symmetric}\n" if clean else "model: {name: resnet18}\n"
                 filtered.write_text(other_config, encoding="utf-8")
-                shadow.unlink()
 
                 with patch.object(cli_shared, "repository_root", return_value=repo), \
                      patch.object(Path, "cwd", return_value=cwd), \
@@ -53,9 +69,9 @@ class _cli_PromptSessionTest(unittest.TestCase):
 
                     def set_manifest(resource, *, duplicate=False):
                         entry = {"id": recipe_id, "path": resource, "profile": "smoke"}
-                        entries = [entry]
+                        entries = [entry, {"id": "other-template", "path": other, "profile": "smoke"}]
                         if duplicate:
-                            entries.append({**entry, "path": repo_other.relative_to(repo).as_posix()})
+                            entries[1]["id"] = recipe_id
                         manifest.return_value = json.dumps({"recipes": entries})
 
                     def assert_default(expected, menu):
@@ -63,23 +79,53 @@ class _cli_PromptSessionTest(unittest.TestCase):
                         session.choose.side_effect = lambda *args, default: default
                         chosen, _ = cli_shared._choose_template(session, clean=clean)
                         self.assertEqual(chosen, expected)
-                        self.assertEqual(session.choose.call_args.args[1],
-                                         [(path.name, path) for path in menu])
+                        self.assertEqual(session.choose.call_args.args[1], menu)
                         session.path.assert_not_called()
 
+                    other = repo_other.relative_to(repo).as_posix()
+                    local_menu = [(f"[本地] {ordinary.name}", ordinary)]
+                    other_item = ("[内置] other-template", repo_other)
                     set_manifest(relative)
-                    assert_default(original, [ordinary, repo_other, original])
-                    shadow.write_text("model: {name: tiny_cnn}\n", encoding="utf-8")
-                    assert_default(shadow, [ordinary, shadow, repo_other, original])
+                    assert_default(original, local_menu + [(f"[内置] {recipe_id}", original), other_item])
+                    shadow.write_text(template, encoding="utf-8")
+                    override = [(f"[本地] {shadow.name}", shadow)]
+                    assert_default(shadow, local_menu + override + [(f"[内置] {recipe_id}", original), other_item])
                     moved = repo / "configs/methods/demo/renamed.yaml"
                     moved.parent.mkdir(parents=True)
                     original.rename(moved)
+                    moved_other = moved.with_name("renamed_other.yaml")
+                    repo_other.rename(moved_other)
+                    other = moved_other.relative_to(repo).as_posix()
+                    moved_menu = [(f"[内置] {recipe_id}", moved), ("[内置] other-template", moved_other)]
                     set_manifest(moved.relative_to(repo).as_posix())
-                    assert_default(shadow, [ordinary, shadow, repo_other, moved])
+                    assert_default(shadow, local_menu + override + moved_menu)
                     shadow.unlink()
-                    assert_default(moved, [ordinary, repo_other, moved])
+                    assert_default(moved, local_menu + moved_menu)
                     set_manifest(moved.relative_to(repo).as_posix(), duplicate=True)
-                    assert_default(ordinary, [ordinary, repo_other])
+                    assert_default(ordinary, local_menu)
+
+    def test_checkout_compatibility_yaml_is_not_a_builtin_or_support_template(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            configs = root / "configs" / "experiment"
+            configs.mkdir(parents=True)
+            template = "data: {name: cifar10}\nmodel: {name: tiny_cnn}\n"
+            custom = configs / "personal.yaml"
+            custom.write_text(template, encoding="utf-8")
+            (configs / "teacher.yaml").write_text("kind: mentor_artifact\n" + template, encoding="utf-8")
+            (configs / "historical.yaml").write_text("execution: {runner: dld}\n" + template, encoding="utf-8")
+            (configs / "fixture.yaml").write_text("execution: {runner: volmin}\n" + template, encoding="utf-8")
+            conditional = configs / "conditional.yaml"
+            conditional.write_text(template, encoding="utf-8")
+            relative = conditional.relative_to(root).as_posix()
+            with patch.object(cli_shared, "repository_root", return_value=root), \
+                 patch.object(Path, "cwd", return_value=root), \
+                 patch.object(catalog.resources, "files") as files:
+                files.return_value.joinpath.return_value.read_text.return_value = json.dumps({
+                    "recipes": [{"id": "test-conditional", "path": relative, "profile": "smoke"}],
+                    "conditional": [relative],
+                })
+                self.assertEqual(cli_shared._experiment_templates(clean=False), ([custom], {}))
 
     def test_template_wizard_keeps_manual_path_without_source_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
