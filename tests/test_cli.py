@@ -607,7 +607,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             prefix = Path(temporary) / 'venv'
             site_packages = prefix / 'lib' / 'site-packages'
             site_packages.mkdir(parents=True)
-            relative = 'configs/experiment/cifar10_volminnet_smoke.yaml'
+            relative = 'configs/methods/volminnet/cifar10_volminnet_smoke.yaml'
             entry = Path('../..') / 'share' / 'lnl-toolbox' / relative
 
             class Distribution:
@@ -671,7 +671,8 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         )
         self.assertIn('lnl mentor prepare', preparation['commands']['prepare'])
         self.assertIn('lnl mentor train', preparation['commands']['train'])
-        self.assertIn('mentornet_dd_teacher_cifar10_symmetric04.yaml', preparation['commands']['prepare'])
+        for action in ('prepare', 'train'):
+            self.assertIn('configs/methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml', preparation['commands'][action])
         mentor['pipeline']['weight_provider']['artifact_path'] = str(_unified_cli_ROOT / 'data/mentornet/missing-artifact-for-test.pt')
         with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact') as raised:
             validate_config(resolve_config_paths(mentor, _unified_cli_ROOT))
@@ -708,7 +709,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             self.assertEqual(validate_config(config).name, 'supervised')
 
     def test_mentor_teacher_config_is_packaged(self) -> None:
-        relative = 'configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml'
+        relative = 'configs/methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml'
         self.assertTrue((_unified_cli_ROOT / relative).is_file())
         self.assertIn(
             f'"{relative}"',
@@ -1234,7 +1235,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             code, text, error = self.invoke('compose', 'create', '--base', 'volminnet-cifar10-reproduction', '--output', str(output))
             self.assertEqual((code, error), (0, ''))
             self.assertIn('论文生命周期：volminnet', text)
-            self.assertEqual(load_yaml(output), load_yaml(_unified_cli_ROOT / 'configs/experiment/volminnet_cifar10_reproduction.yaml'))
+            self.assertEqual(load_yaml(output), load_yaml(_unified_cli_ROOT / 'configs/methods/volminnet/volminnet_cifar10_reproduction.yaml'))
             rejected = Path(directory) / 'invalid.yaml'
             code, _, error = self.invoke('compose', 'create', '--base', 'volminnet-cifar10-reproduction', '--loss', 'ce', '--output', str(rejected))
             self.assertEqual(code, 2)
@@ -1403,7 +1404,7 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.path = _dld_cli_ROOT / 'configs' / 'experiment' / 'cifar10_dld_smoke.yaml'
+        cls.path = _dld_cli_ROOT / 'configs' / 'methods' / 'dld' / 'cifar10_dld_smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self) -> None:
@@ -1425,7 +1426,7 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
             self.assertIn(value, text)
 
     def test_real_short_config_validates_and_dry_runs(self) -> None:
-        path = _dld_cli_ROOT / 'configs' / 'reproduction' / 'cifar10_dld_sym20_short.yaml'
+        path = _dld_cli_ROOT / 'configs' / 'methods' / 'dld' / 'support' / 'cifar10_dld_sym20_short.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
         self.assertEqual(validate_config(config).name, 'dld')
         code, text, error = _invoke_cli(*['run', '--config', str(path), '--dry-run', '--no-check-data'])
@@ -1611,7 +1612,7 @@ class _upm_cli_UPMCliTest(unittest.TestCase):
         self.assertNotIn('epochs', config['trainer'])
 
     def test_dry_run_reports_stages_psi_and_eta(self) -> None:
-        config_path = Path('configs/experiment/cifar10_upm_smoke.yaml').resolve()
+        config_path = Path('configs/methods/upm/cifar10_upm_smoke.yaml').resolve()
         code, text, error = _invoke_cli(*['run', '--config', str(config_path), '--dry-run', '--no-check-data'])
         self.assertEqual(code, 0, error)
         for expected in ('upm', '2/2 (stage1/main)', 'UPM psi source: stage1_best', 'UPM eta initial value: 0.01', 'UPM eta update start epoch: 0', 'UPM eta update interval: 1'):

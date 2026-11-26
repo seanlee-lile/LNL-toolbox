@@ -590,8 +590,8 @@ Recipe/YAML 编辑功能。`lnl web` 由 `cli/main.py` 启动 `web/command_conso
 | `models/cifar_cnn.py` | `CNN9` 实现论文附录的九层 CIFAR CNN |
 | `training/experiment.py` | 注册通用 `cnn9` 模型名和 `linear_after` scheduler，不包含 CNLCU 论文分支 |
 | `configs/methods/cnlcu/cnlcu_cifar10_reproduction.yaml` | CNLCU-S CIFAR-10 Sym20 单组论文协议配置 |
-| `configs/experiment/volminnet_cifar10_reproduction.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
-| `configs/experiment/dld_cifar10_reproduction.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |
+| `configs/methods/volminnet/volminnet_cifar10_reproduction.yaml` | VolMinNet CIFAR-10 Sym20 单组论文协议配置 |
+| `configs/methods/dld/dld_cifar10_reproduction.yaml` | DLD 完整预算的当前工具箱配置；因未接入官方 ViT-L/14 特征路径，明确标记 `paper_oriented` |
 
 正式 YAML 表示完整数据规模、模型、优化器、scheduler 与训练预算均已写明，不等价于已完成论文多 seed 数值复现。
 

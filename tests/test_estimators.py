@@ -311,7 +311,7 @@ class VolMinNetPaperDefaultsTest(unittest.TestCase):
     def test_formal_network_can_train_one_short_epoch(self):
         from lnl_toolbox.catalog import load_yaml
         from lnl_toolbox.training.experiment import run_experiment
-        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/experiment/volminnet_cifar10_reproduction.yaml')
+        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/methods/volminnet/volminnet_cifar10_reproduction.yaml')
         config['trainer'].update(epochs=1, device='cpu')
         config['data'].update(validation_size=10, max_train_samples=20,
                               max_validation_samples=10, max_test_samples=10, augment=False)

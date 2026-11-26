@@ -129,6 +129,33 @@ RELOCATIONS = {
         "t-revision": (
             "cifar10_t_revision_smoke.yaml",
         ),
+        "cal": (
+            "cal_cifar10_reproduction.yaml",
+            "cal_cifar10_smoke.yaml",
+        ),
+        "dld": (
+            "cifar10_dld_smoke.yaml",
+            "dld_cifar10_reproduction.yaml",
+        ),
+        "upm": (
+            "cifar10_upm_smoke.yaml",
+            "upm_cifar10_reproduction.yaml",
+        ),
+        "mentornet": (
+            "mentornet_dd_cifar100_symmetric04_reproduction.yaml",
+            "mentornet_dd_cifar100_symmetric04_smoke.yaml",
+        ),
+        "pcse": (
+            "pcse_multiclass_smoke.yaml",
+            "pcse_multiclass_volmin_smoke.yaml",
+        ),
+        "volminnet": (
+            "cifar10_volminnet_smoke.yaml",
+            "volminnet_cifar10_reproduction.yaml",
+        ),
+        "mentornet/producer": (
+            "mentornet_dd_teacher_cifar10_symmetric04.yaml",
+        ),
     }.items()
     for filename in files
 } | {
@@ -154,6 +181,12 @@ RELOCATIONS = {
         "t-revision": (
             "cifar10_t_revision_sym20_short.yaml",
             "cifar10_t_revision_sym20_reproduction.yaml",
+        ),
+        "pcse": (
+            "cifar10_pcse_reproduction.yaml",
+        ),
+        "dld/support": (
+            "cifar10_dld_sym20_short.yaml",
         ),
     }.items()
     for filename in files

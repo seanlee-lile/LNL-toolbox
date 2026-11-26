@@ -35,7 +35,7 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 **GCE（现有 loss 和 runner）。** 参考 `methods/gce/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
 
-**DLD（专用生命周期与前置条件）。** 参考 `experiment/dld_cifar10_reproduction.yaml`，保留 `dld` runner 及其特征提取、扩散和推理阶段。完成相同的路径登记及 Paper 关联；如果所用正式配置依赖外部特征来源，还需登记 `conditional`。只有正式参数基准或可编辑字段变化时，才同步 Web 绑定。
+**DLD（专用生命周期与前置条件）。** 参考 `methods/dld/dld_cifar10_reproduction.yaml`，保留 `dld` runner 及其特征提取、扩散和推理阶段。完成相同的路径登记及 Paper 关联；如果所用正式配置依赖外部特征来源，还需登记 `conditional`。只有正式参数基准或可编辑字段变化时，才同步 Web 绑定。
 
 ## 用户可见配方
 

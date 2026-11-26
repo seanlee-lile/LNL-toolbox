@@ -1137,7 +1137,7 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
     def test_registered_pcse_volmin_fixture_trains_without_parameter_replacement(self) -> None:
         from lnl_toolbox.catalog import validate_config
 
-        config = self._config('configs/experiment/pcse_multiclass_volmin_smoke.yaml')
+        config = self._config('configs/methods/pcse/pcse_multiclass_volmin_smoke.yaml')
         original = deepcopy(config)
         self.assertEqual(validate_config(config).name, 'pcse')
         with tempfile.TemporaryDirectory() as directory:
@@ -1151,7 +1151,7 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
     def test_all_new_workflows_smoke_and_resume(self) -> None:
         paths = (
             'configs/methods/mc-ldce/mc_ldce_cifar10_smoke.yaml',
-            'configs/experiment/cal_cifar10_smoke.yaml',
+            'configs/methods/cal/cal_cifar10_smoke.yaml',
             'configs/methods/ca2c/ca2c_cifar10_smoke.yaml',
         )
         with tempfile.TemporaryDirectory() as directory:

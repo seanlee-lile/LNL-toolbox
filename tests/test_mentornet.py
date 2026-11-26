@@ -93,7 +93,7 @@ class _mentornet_MentorNetTest(unittest.TestCase):
     def test_teacher_yaml_generates_loadable_official_artifact(self) -> None:
         import yaml
         root = Path(__file__).resolve().parents[1]
-        config = yaml.safe_load((root / 'configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml').read_text(encoding='utf-8'))
+        config = yaml.safe_load((root / 'configs/methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml').read_text(encoding='utf-8'))
         self.assertEqual(config['model']['implementation'], 'official')
         with tempfile.TemporaryDirectory() as directory:
             feature_path = Path(directory) / 'features.npz'
