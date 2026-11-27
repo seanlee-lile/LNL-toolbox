@@ -733,7 +733,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
             command_console._sweep_plan_payload(
                 {
                     "recipe": "fine-cifar100n-reproduction",
-                    "path": "configs/methods/fine/fine_cifar100n_reproduction.yaml",
+                    "path": "configs/methods/fine/cifar100-sym20-reproduction.yaml",
                 }
             )
         with self.assertRaisesRegex(ValueError, "locked parameter"):
@@ -1131,7 +1131,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
             custom = load_yaml(command_console.ROOT / saved["path"])
             self.assertEqual(custom["scheduler"]["lr_values"], [0.003, 0.0007])
             self.assertEqual(custom["scheduler"]["gamma"], 0.1)
-            formal = load_yaml(command_console.ROOT / "configs/methods/gce/gce_cifar10_noise02_reproduction.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/methods/gce/cifar10-sym20-reproduction.yaml")
             self.assertNotIn("lr_values", formal["scheduler"])
             with self.assertRaisesRegex(ValueError, "one value per milestone"):
                 command_console._save_config({
@@ -1158,7 +1158,7 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
                 "acknowledge_paper_impact": True,
             })
             custom = load_yaml(destination)
-            formal = load_yaml(command_console.ROOT / "configs/methods/lend/lend_cifar10_reproduction.yaml")
+            formal = load_yaml(command_console.ROOT / "configs/methods/lend/cifar10-sym40-reproduction.yaml")
             self.assertEqual(custom["scheduler"]["lr_values"], [0.007])
             self.assertNotIn("lr_values", formal["scheduler"])
             self.assertEqual(formal["optimizer"]["lr"], 0.05)

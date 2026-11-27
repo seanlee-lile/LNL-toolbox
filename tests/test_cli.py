@@ -676,7 +676,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             prefix = Path(temporary) / 'venv'
             site_packages = prefix / 'lib' / 'site-packages'
             site_packages.mkdir(parents=True)
-            relative = 'configs/methods/volminnet/cifar10_volminnet_smoke.yaml'
+            relative = 'configs/methods/volminnet/cifar10-sym40-smoke.yaml'
             entry = Path('../..') / 'share' / 'lnl-toolbox' / relative
 
             class Distribution:
@@ -741,7 +741,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
         self.assertIn('lnl mentor prepare', preparation['commands']['prepare'])
         self.assertIn('lnl mentor train', preparation['commands']['train'])
         for action in ('prepare', 'train'):
-            self.assertIn('configs/methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml', preparation['commands'][action])
+            self.assertIn('configs/methods/mentornet/producer/cifar10-sym40-teacher-producer.yaml', preparation['commands'][action])
         mentor['pipeline']['weight_provider']['artifact_path'] = str(_unified_cli_ROOT / 'data/mentornet/missing-artifact-for-test.pt')
         with self.assertRaisesRegex(ValueError, 'conditional.*MentorArtifact') as raised:
             validate_config(resolve_config_paths(mentor, _unified_cli_ROOT))
@@ -778,7 +778,7 @@ class _unified_cli_CatalogTest(unittest.TestCase):
             self.assertEqual(validate_config(config).name, 'supervised')
 
     def test_mentor_teacher_config_is_packaged(self) -> None:
-        relative = 'configs/methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml'
+        relative = 'configs/methods/mentornet/producer/cifar10-sym40-teacher-producer.yaml'
         self.assertTrue((_unified_cli_ROOT / relative).is_file())
         self.assertIn(
             f'"{relative}"',
@@ -912,7 +912,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         explicit_code, explicit_output, explicit_error = self.invoke(*args, '--profile', 'smoke')
         self.assertEqual((code, output), (explicit_code, explicit_output))
         self.assertEqual(code, 0)
-        self.assertIn('gce_cifar10_noise02_smoke.yaml', output)
+        self.assertIn('cifar10-sym20-smoke.yaml', output)
         self.assertIn('reproduction, smoke', error)
         self.assertIn('--profile', error)
         self.assertEqual(explicit_error, '')
@@ -1292,7 +1292,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertEqual(output.splitlines()[0], 'id\tacronym\ttitle\tvenue\tyear\tprofiles\tfidelity\trunners\trecommended')
 
     def test_paper_config_resolved_does_not_change_source(self) -> None:
-        path = _unified_cli_ROOT / 'configs/methods/coteaching/cifar10_coteaching_smoke.yaml'
+        path = _unified_cli_ROOT / 'configs/methods/coteaching/cifar10-sym40-smoke.yaml'
         before = path.read_bytes()
         code, output, _ = self.invoke('papers', 'config', 'coteaching', '--profile', 'smoke', '--resolved')
         self.assertEqual(code, 0)
@@ -1391,7 +1391,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('cifar10-dual-t-smoke', output)
 
     def test_compose_creates_valid_yaml_without_overwriting(self) -> None:
-        source = _unified_cli_ROOT / 'configs/methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml'
+        source = _unified_cli_ROOT / 'configs/methods/supervised-baselines/cifar10-sym40-ce-smoke.yaml'
         before = source.read_bytes()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'gce_small_loss.yaml'
@@ -1421,7 +1421,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
             code, text, error = self.invoke('compose', 'create', '--base', 'volminnet-cifar10-reproduction', '--output', str(output))
             self.assertEqual((code, error), (0, ''))
             self.assertIn('论文生命周期：volminnet', text)
-            self.assertEqual(load_yaml(output), load_yaml(_unified_cli_ROOT / 'configs/methods/volminnet/volminnet_cifar10_reproduction.yaml'))
+            self.assertEqual(load_yaml(output), load_yaml(_unified_cli_ROOT / 'configs/methods/volminnet/cifar10-sym20-reproduction.yaml'))
             rejected = Path(directory) / 'invalid.yaml'
             code, _, error = self.invoke('compose', 'create', '--base', 'volminnet-cifar10-reproduction', '--loss', 'ce', '--output', str(rejected))
             self.assertEqual(code, 2)
@@ -1457,7 +1457,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('paper_positive_logdet', output)
         code, output, _ = self.invoke('papers', 'config', 'volminnet', '--profile', 'smoke', '--path-only')
         self.assertEqual(code, 0)
-        self.assertTrue(output.strip().endswith('cifar10_volminnet_smoke.yaml'))
+        self.assertTrue(output.strip().endswith('cifar10-sym40-smoke.yaml'))
 
     def test_volminnet_validate_dry_run_and_epoch_override(self) -> None:
         code, _, error = self.invoke('validate', '--recipe', 'cifar10-volminnet-smoke')
@@ -1482,7 +1482,7 @@ class _unified_cli_UnifiedCliTest(unittest.TestCase):
         self.assertIn('Training budget: 2', output)
 
     def test_positional_yaml_is_accepted(self) -> None:
-        path = _unified_cli_ROOT / 'configs/methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml'
+        path = _unified_cli_ROOT / 'configs/methods/supervised-baselines/cifar10-sym40-ce-smoke.yaml'
         code, output, error = self.invoke('validate', str(path))
         self.assertEqual(code, 0, error)
         self.assertIn('supervised', output)
@@ -1590,7 +1590,7 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.path = _dld_cli_ROOT / 'configs' / 'methods' / 'dld' / 'cifar10_dld_smoke.yaml'
+        cls.path = _dld_cli_ROOT / 'configs' / 'methods' / 'dld' / 'cifar10-sym20-tinycnn-smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self) -> None:
@@ -1612,7 +1612,7 @@ class _dld_cli_DLDCliTest(unittest.TestCase):
             self.assertIn(value, text)
 
     def test_real_short_config_validates_and_dry_runs(self) -> None:
-        path = _dld_cli_ROOT / 'configs' / 'methods' / 'dld' / 'support' / 'cifar10_dld_sym20_short.yaml'
+        path = _dld_cli_ROOT / 'configs' / 'methods' / 'dld' / 'support' / 'cifar10-sym20-resnet34-external-short.yaml'
         config = yaml.safe_load(path.read_text(encoding='utf-8'))
         self.assertEqual(validate_config(config).name, 'dld')
         code, text, error = _invoke_cli(*['run', '--config', str(path), '--dry-run', '--no-check-data'])
@@ -1631,9 +1631,9 @@ class _lend_cli_LENDCliTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.path = _lend_cli_ROOT / 'configs/methods/lend/cifar10_lend_smoke.yaml'
+        cls.path = _lend_cli_ROOT / 'configs/methods/lend/cifar10-sym20-smoke.yaml'
         cls.config = yaml.safe_load(cls.path.read_text(encoding='utf-8'))
-        cls.reproduction_path = _lend_cli_ROOT / 'configs/methods/lend/lend_cifar10_reproduction.yaml'
+        cls.reproduction_path = _lend_cli_ROOT / 'configs/methods/lend/cifar10-sym40-reproduction.yaml'
         cls.reproduction_config = yaml.safe_load(cls.reproduction_path.read_text(encoding='utf-8'))
 
     def test_registry_recipe_paper_and_preflight(self):
@@ -1798,7 +1798,7 @@ class _upm_cli_UPMCliTest(unittest.TestCase):
         self.assertNotIn('epochs', config['trainer'])
 
     def test_dry_run_reports_stages_psi_and_eta(self) -> None:
-        config_path = Path('configs/methods/upm/cifar10_upm_smoke.yaml').resolve()
+        config_path = Path('configs/methods/upm/cifar10-sym20-smoke.yaml').resolve()
         code, text, error = _invoke_cli(*['run', '--config', str(config_path), '--dry-run', '--no-check-data'])
         self.assertEqual(code, 0, error)
         for expected in ('upm', '2/2 (stage1/main)', 'UPM psi source: stage1_best', 'UPM eta initial value: 0.01', 'UPM eta update start epoch: 0', 'UPM eta update interval: 1'):

@@ -445,7 +445,7 @@ class CWDAdamBeta1ScheduleTest(unittest.TestCase):
     def test_yaml_parser_and_catalog_preserve_enabled_flag(self):
         import yaml
         from lnl_toolbox.catalog import load_yaml, validate_config
-        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/methods/cwd/cwd_cifar10_reproduction.yaml')
+        config = load_yaml(Path(__file__).resolve().parents[1] / 'configs/methods/cwd/cifar10-airplane-automobile-rcn20-20-scalar-reproduction.yaml')
         config['optimizer']['beta1_schedule'] = True
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'config.yaml'

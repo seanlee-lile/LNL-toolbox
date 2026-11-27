@@ -41,7 +41,7 @@ python -m unittest discover -s tests -v
 
 ```powershell
 python -m unittest discover -s tests -v
-lnl run --config configs/methods/supervised-baselines/cifar10_smoke.yaml
+lnl run --config configs/methods/supervised-baselines/cifar10-clean-ce-smoke.yaml
 ```
 
 ### 4.3 提交前
@@ -83,8 +83,8 @@ git push
 | 文件 | 功能 | 关键字段或注意事项 |
 |---|---|---|
 | `configs/README.md` | 解释配置层与核心框架的关系。 | 配置机制变化时更新。 |
-| `configs/methods/supervised-baselines/cifar10_smoke.yaml` | 两轮、小样本快速实验。 | 用于确认程序能跑通，不用于报告正式精度。 |
-| `configs/methods/clean/cifar10_clean.yaml` | 30 轮干净 CIFAR-10 基准实验。 | 正式运行前确认数据路径、设备和训练轮数。 |
+| `configs/methods/supervised-baselines/cifar10-clean-ce-smoke.yaml` | 两轮、小样本快速实验。 | 用于确认程序能跑通，不用于报告正式精度。 |
+| `configs/methods/clean/cifar10-tinycnn-train.yaml` | 30 轮干净 CIFAR-10 基准实验。 | 正式运行前确认数据路径、设备和训练轮数。 |
 | [配置参考](../configs/README.md#配置参考) | CE/GCE、Co-teaching、对称噪声和 IDN 等现行字段与入口。 | 从对应完整配置开始；IDN 的 class-score 生成器是 Python API。 |
 | [未登记的科研支持配置](../configs/README.md#未登记的科研支持配置) | 方法专用短配置、独立 VolMin 对照。 | 直接按路径使用，不进入正式菜单或发布包。 |
 

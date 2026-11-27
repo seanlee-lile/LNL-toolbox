@@ -7,6 +7,98 @@ schema_version: 1
 kind: experiment  # 或 fragment / mentor_artifact
 ```
 
+
+## 文件名迁移（旧路径 → 新路径）
+
+只改了文件名，未改变 YAML、recipe ID、profile 或训练合同。正式 recipe 推荐使用 `lnl run --recipe <id>`，用 `lnl papers config <paper> --profile <profile> --variant <variant> --path-only` 查询当前 Paper 配置位置。对仍用旧 `--config`、Sweep `base.config` 或 `mentor prepare/train --config` 的命令，按下表替换完整路径；路径均相对于 `configs/`。不要改已有 run 目录或外部 wizard 的 `configs/experiment/cifar10_smoke.yaml`、`configs/experiment/cifar10_clean_smoke.yaml`。
+
+<details>
+<summary>查看完整旧→新路径（79 项）</summary>
+
+| 旧路径 | 新路径 |
+| --- | --- |
+| `algorithm/cnlcu_hard.yaml` | `algorithm/cnlcu-hard.yaml` |
+| `methods/apl/apl_cifar10_noise02_reproduction.yaml` | `methods/apl/cifar10-sym20-reproduction.yaml` |
+| `methods/apl/apl_cifar10_noise02_smoke.yaml` | `methods/apl/cifar10-sym20-smoke.yaml` |
+| `methods/apl/apl_cifar10_noise04_reproduction.yaml` | `methods/apl/cifar10-sym40-reproduction.yaml` |
+| `methods/binary-risk/binary_risk_natarajan_1epoch.yaml` | `methods/binary-risk/synthetic-binary-2d-rcn20-10-1epoch.yaml` |
+| `methods/binary-risk/binary_risk_natarajan_reproduction.yaml` | `methods/binary-risk/synthetic-binary-2d-rcn40-40-reproduction.yaml` |
+| `methods/ca2c/ca2c_cifar100_reproduction.yaml` | `methods/ca2c/cifar100-sym20-reproduction.yaml` |
+| `methods/ca2c/ca2c_cifar10_smoke.yaml` | `methods/ca2c/synthetic-multiclass-sym10-smoke.yaml` |
+| `methods/cal/cal_cifar10_reproduction.yaml` | `methods/cal/cifar10-idn20-external-reproduction.yaml` |
+| `methods/cal/cal_cifar10_smoke.yaml` | `methods/cal/synthetic-multiclass-sym10-smoke.yaml` |
+| `methods/cdr/cifar10_symmetric_cdr_reproduction.yaml` | `methods/cdr/cifar10-sym40-official-code-reproduction.yaml` |
+| `methods/cdr/cifar10_symmetric_cdr_smoke.yaml` | `methods/cdr/cifar10-sym40-paper-smoke.yaml` |
+| `methods/clean/cifar10_clean.yaml` | `methods/clean/cifar10-tinycnn-train.yaml` |
+| `methods/clean/cifar10_clean_baseline.yaml` | `methods/clean/cifar10-preact-resnet18-baseline.yaml` |
+| `methods/clean/cifar10_clean_smoke.yaml` | `methods/clean/cifar10-tinycnn-smoke.yaml` |
+| `methods/cnlcu/cifar10_cnlcu_hard_smoke.yaml` | `methods/cnlcu/cifar10-sym40-hard-smoke.yaml` |
+| `methods/cnlcu/cifar10_cnlcu_soft_smoke.yaml` | `methods/cnlcu/cifar10-sym40-soft-smoke.yaml` |
+| `methods/cnlcu/cnlcu_cifar10_reproduction.yaml` | `methods/cnlcu/cifar10-sym20-soft-reproduction.yaml` |
+| `methods/cnlcu/support/cifar10_cnlcu_soft_sym20_short.yaml` | `methods/cnlcu/support/cifar10-sym20-soft-short.yaml` |
+| `methods/coteaching/cifar10_coteaching_reproduction.yaml` | `methods/coteaching/cifar10-sym20-reproduction.yaml` |
+| `methods/coteaching/cifar10_coteaching_smoke.yaml` | `methods/coteaching/cifar10-sym40-smoke.yaml` |
+| `methods/cwd/cwd_cifar10_reproduction.yaml` | `methods/cwd/cifar10-airplane-automobile-rcn20-20-scalar-reproduction.yaml` |
+| `methods/cwd/cwd_cifar10_smoke.yaml` | `methods/cwd/cifar10-airplane-automobile-rcn20-20-smoke.yaml` |
+| `methods/cwd/support/cwd_cifar10_1epoch.yaml` | `methods/cwd/support/cifar10-airplane-automobile-rcn20-20-1epoch.yaml` |
+| `methods/dividemix/cifar10_dividemix_smoke.yaml` | `methods/dividemix/cifar10-sym20-smoke.yaml` |
+| `methods/dividemix/cifar10_dividemix_sym20.yaml` | `methods/dividemix/cifar10-sym20-reproduction.yaml` |
+| `methods/dld/cifar10_dld_smoke.yaml` | `methods/dld/cifar10-sym20-tinycnn-smoke.yaml` |
+| `methods/dld/dld_cifar10_reproduction.yaml` | `methods/dld/cifar10-sym20-resnet34-external-reproduction.yaml` |
+| `methods/dld/support/cifar10_dld_sym20_short.yaml` | `methods/dld/support/cifar10-sym20-resnet34-external-short.yaml` |
+| `methods/dss/dss_cifar10_symmetric05_reproduction.yaml` | `methods/dss/cifar10-sym50-reproduction.yaml` |
+| `methods/dss/dss_cifar10_symmetric05_smoke.yaml` | `methods/dss/cifar10-sym50-smoke.yaml` |
+| `methods/dual-t/cifar10_dual_t_smoke.yaml` | `methods/dual-t/cifar10-sym20-smoke.yaml` |
+| `methods/dual-t/cifar10_dual_t_sym20.yaml` | `methods/dual-t/cifar10-sym20-reproduction.yaml` |
+| `methods/dual-t/evidence/cifar10_dual_t_evidence_smoke.yaml` | `methods/dual-t/evidence/cifar10-sym20-evidence-smoke.yaml` |
+| `methods/dual-t/evidence/cifar10_dual_t_sym20_evidence.yaml` | `methods/dual-t/evidence/cifar10-sym20-evidence-reproduction.yaml` |
+| `methods/fine/fine_cifar100n_reproduction.yaml` | `methods/fine/cifar100-sym20-reproduction.yaml` |
+| `methods/fine/fine_cifar100n_smoke.yaml` | `methods/fine/cifar100-sym20-smoke.yaml` |
+| `methods/fine/support/fine_cifar100n_1epoch.yaml` | `methods/fine/support/cifar100-sym20-warmup-1epoch.yaml` |
+| `methods/gce/gce_cifar10_noise02_reproduction.yaml` | `methods/gce/cifar10-sym20-reproduction.yaml` |
+| `methods/gce/gce_cifar10_noise02_smoke.yaml` | `methods/gce/cifar10-sym20-smoke.yaml` |
+| `methods/importance-reweighting/importance_reweighting_binary_high_dim.yaml` | `methods/importance-reweighting/synthetic-binary-high-dim-rcn20-10-kliep-reproduction.yaml` |
+| `methods/importance-reweighting/importance_reweighting_binary_high_dim_smoke.yaml` | `methods/importance-reweighting/synthetic-binary-high-dim-rcn20-10-kliep-smoke.yaml` |
+| `methods/importance-reweighting/importance_reweighting_binary_low_dim.yaml` | `methods/importance-reweighting/synthetic-binary-2d-rcn20-10-kde-reproduction.yaml` |
+| `methods/importance-reweighting/importance_reweighting_binary_smoke.yaml` | `methods/importance-reweighting/synthetic-binary-2d-rcn20-10-kde-smoke.yaml` |
+| `methods/importance-reweighting/uci_heart_importance_reweighting.yaml` | `methods/importance-reweighting/uci-statlog-heart-rcn30-10-kliep-experiment.yaml` |
+| `methods/jocor/jocor_cifar10_symmetric05_reproduction.yaml` | `methods/jocor/cifar10-sym50-reproduction.yaml` |
+| `methods/jocor/jocor_cifar10_symmetric05_smoke.yaml` | `methods/jocor/cifar10-sym50-smoke.yaml` |
+| `methods/l2rw/l2rw_cifar10_reproduction.yaml` | `methods/l2rw/cifar10-uniformflip40-reproduction.yaml` |
+| `methods/l2rw/l2rw_cifar10_smoke.yaml` | `methods/l2rw/synthetic-multiclass-sym20-smoke.yaml` |
+| `methods/l2rw/support/l2rw_cifar10_1epoch.yaml` | `methods/l2rw/support/cifar10-sym40-audited-trusted-1epoch.yaml` |
+| `methods/lend/cifar10_lend_smoke.yaml` | `methods/lend/cifar10-sym20-smoke.yaml` |
+| `methods/lend/lend_cifar10_reproduction.yaml` | `methods/lend/cifar10-sym40-reproduction.yaml` |
+| `methods/loss-correction/loss_correction_cifar10_asymmetric04.yaml` | `methods/loss-correction/cifar10-class-conditional40-known-t-reproduction.yaml` |
+| `methods/mc-ldce/mc_ldce_cifar10_reproduction.yaml` | `methods/mc-ldce/cifar10-sym20-reproduction.yaml` |
+| `methods/mc-ldce/mc_ldce_cifar10_smoke.yaml` | `methods/mc-ldce/synthetic-multiclass-sym10-smoke.yaml` |
+| `methods/mc-ldce/support/mc_ldce_cifar10_1epoch.yaml` | `methods/mc-ldce/support/cifar10-sym20-estimated-t-1epoch.yaml` |
+| `methods/mentornet/mentornet_dd_cifar100_symmetric04_reproduction.yaml` | `methods/mentornet/cifar100-sym40-student-reproduction.yaml` |
+| `methods/mentornet/mentornet_dd_cifar100_symmetric04_smoke.yaml` | `methods/mentornet/cifar100-sym40-student-smoke.yaml` |
+| `methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml` | `methods/mentornet/producer/cifar10-sym40-teacher-producer.yaml` |
+| `methods/mentornet/support/mentornet_cifar10_symmetric04_1epoch.yaml` | `methods/mentornet/support/cifar10-sym40-student-1epoch.yaml` |
+| `methods/pcse/cifar10_pcse_reproduction.yaml` | `methods/pcse/cifar10-sym40-paper-volmin-reproduction.yaml` |
+| `methods/pcse/pcse_multiclass_smoke.yaml` | `methods/pcse/synthetic-multiclass-sym10-dual-t-smoke.yaml` |
+| `methods/pcse/pcse_multiclass_volmin_smoke.yaml` | `methods/pcse/synthetic-multiclass-sym10-paper-volmin-smoke.yaml` |
+| `methods/pdl/pdl_cifar10_reproduction.yaml` | `methods/pdl/cifar10-pdl40-reproduction.yaml` |
+| `methods/pdl/pdl_cifar10_smoke.yaml` | `methods/pdl/cifar10-pdl40-smoke.yaml` |
+| `methods/supervised-baselines/cifar10_foundation_smoke.yaml` | `methods/supervised-baselines/cifar10-sym40-anchor-smoke.yaml` |
+| `methods/supervised-baselines/cifar10_smoke.yaml` | `methods/supervised-baselines/cifar10-clean-ce-smoke.yaml` |
+| `methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml` | `methods/supervised-baselines/cifar10-sym40-ce-smoke.yaml` |
+| `methods/supervised-baselines/cifar10_symmetric_small_loss_linear_smoke.yaml` | `methods/supervised-baselines/cifar10-sym40-small-loss-linear-smoke.yaml` |
+| `methods/supervised-baselines/cifar10_symmetric_small_loss_smoke.yaml` | `methods/supervised-baselines/cifar10-sym40-small-loss-fixed-smoke.yaml` |
+| `methods/t-revision/cifar10_t_revision_smoke.yaml` | `methods/t-revision/cifar10-sym40-smoke.yaml` |
+| `methods/t-revision/cifar10_t_revision_sym20_reproduction.yaml` | `methods/t-revision/cifar10-sym20-reproduction.yaml` |
+| `methods/t-revision/cifar10_t_revision_sym20_short.yaml` | `methods/t-revision/cifar10-sym20-short.yaml` |
+| `methods/upm/cifar10_upm_smoke.yaml` | `methods/upm/cifar10-sym20-smoke.yaml` |
+| `methods/upm/upm_cifar10_reproduction.yaml` | `methods/upm/cifar10-sym40-reproduction.yaml` |
+| `methods/volminnet/cifar10_volminnet_smoke.yaml` | `methods/volminnet/cifar10-sym40-smoke.yaml` |
+| `methods/volminnet/legacy/volmin_cifar10_reproduction.yaml` | `methods/volminnet/legacy/cifar10-sym40-reproduction.yaml` |
+| `methods/volminnet/legacy/volmin_cifar10_smoke.yaml` | `methods/volminnet/legacy/synthetic-multiclass-sym20-smoke.yaml` |
+| `methods/volminnet/volminnet_cifar10_reproduction.yaml` | `methods/volminnet/cifar10-sym20-reproduction.yaml` |
+
+</details>
+
 ## v1.0 术语
 
 | 术语 | 在 Toolbox 中的含义 |
@@ -23,7 +115,7 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 1. 将完整实验写为 `kind: experiment`，使用 `snake_case` 的字段、注册键和 YAML 文件名，沿用现有 runner、方法和组件的精确注册名。参考片段用 `kind: fragment`，MentorNet 等生产者配置按各自入口使用，不能当作普通训练 recipe 登记。
 2. 为新配方选择全局唯一的稳定 ID，使用小写字母、数字和连字符。文件名可用 `_smoke`、`_reproduction` 后缀帮助读者辨识，但不定义 ID、profile 或 fidelity。不要因重命名 YAML 而改变已发布的 ID。
-3. 在 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes` 中登记恰含 `id`、`path`、`profile` 的对象，例如现有 GCE smoke 条目：`{"id": "gce-cifar10-noise02-smoke", "path": "configs/methods/gce/gce_cifar10_noise02_smoke.yaml", "profile": "smoke"}`。不接受裸路径字符串。同步 `pyproject.toml` 的 `tool.setuptools.data-files`，按需以相同路径登记 `conditional` 或精选 `public` 条目。文件存在或被打包均不会自动登记 recipe。
+3. 在 `src/lnl_toolbox/cli/data/recipe_catalog.json` 的 `recipes` 中登记恰含 `id`、`path`、`profile` 的对象，例如现有 GCE smoke 条目：`{"id": "gce-cifar10-noise02-smoke", "path": "configs/methods/gce/cifar10-sym20-smoke.yaml", "profile": "smoke"}`。不接受裸路径字符串。同步 `pyproject.toml` 的 `tool.setuptools.data-files`，按需以相同路径登记 `conditional` 或精选 `public` 条目。文件存在或被打包均不会自动登记 recipe。
 4. 若配方应出现在 Paper 页面，在 `src/lnl_toolbox/paper_catalog.json` 补齐 `recipe_id`、`profile` 和用于选择的 `variant`（新标签用连字符分隔）。保留该 Paper 的正式默认顺序，代码取第一个 `reproduction` 条目。新增条目的 Paper profile 应与发现 profile 一致。已有 Loss Correction 条目的 Paper profile 为 `reproduction`，发现 profile 为 `experiment`，属于保留的历史例外。
 5. 若配方替换正式参数编辑基准或新增可编辑字段，检查 `web/lnl_parameter_metadata_registry_revised.yaml` 中的正式绑定与字段路径。运行配置、catalog 关联和 Web 参数展示分别承担执行、导航和编辑职责。
 
@@ -33,23 +125,23 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 向导另从当前项目的 `configs/experiment/*.yaml` 发现本地文件，保留独立用户项目的同名优先与无候选时的手输路径。源码根目录中的未登记文件只有符合向导资格才会显示为本地项；这避免将专用工作流和测试配置混入普通模板。Producer 用专用入口运行；packaged-only 辅助配置、开发例与任意自定义 YAML 可按路径使用。独立安装不自动从包内填充向导菜单；`--recipe` 和显式 `--config` 不受影响。
 
-**GCE（现有 loss 和 runner）。** 参考 `methods/gce/gce_cifar10_noise02_reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
+**GCE（现有 loss 和 runner）。** 参考 `methods/gce/cifar10-sym20-reproduction.yaml`。新增同类配方时沿用 `supervised` 和 `loss.name: gce`，完成 YAML、manifest 和打包路径登记，再按需关联 GCE Paper。沿用现有字段和正式编辑基准时，无需修改 Web 元数据。
 
-**DLD（专用生命周期与前置条件）。** 参考 `methods/dld/dld_cifar10_reproduction.yaml`，保留 `dld` runner 及其特征提取、扩散和推理阶段。完成相同的路径登记及 Paper 关联；如果所用正式配置依赖外部特征来源，还需登记 `conditional`。只有正式参数基准或可编辑字段变化时，才同步 Web 绑定。
+**DLD（专用生命周期与前置条件）。** 参考 `methods/dld/cifar10-sym20-resnet34-external-reproduction.yaml`，保留 `dld` runner 及其特征提取、扩散和推理阶段。完成相同的路径登记及 Paper 关联；如果所用正式配置依赖外部特征来源，还需登记 `conditional`。只有正式参数基准或可编辑字段变化时，才同步 Web 绑定。
 
 ## 配置参考
 
 下列字段都放在完整的 `kind: experiment` 配置中；从对应完整 recipe 开始，再按需要修改。历史示例值不等于论文推荐值。
 
-- **基础 loss 与噪声。** 在 `loss` 下用 `name: ce` 选择 CE；在 `noise` 下用 `name: symmetric`、`rate` 和 `seed` 分别指定噪声类型、翻转率和随机种子。见 [CE + symmetric 完整示例](methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml)。
-- **APL / NCE。** `loss.name: apl` 组合正权重 `alpha` / `beta` 与 `active.name: nce` / `passive.name: rce`。例如自定义 `loss.passive.log_zero: -4.0` 并不是[现行 APL 正式值](methods/apl/apl_cifar10_noise02_reproduction.yaml) `log(1e-4)`。NCE 也可作为注册的独立 loss：使用 `loss.name: nce`，按需设置 `loss.eps`，字段见 [NCE 片段](algorithm/nce.yaml)。
-- **CDR。** `cdr.compatibility_mode` 区分 [`paper`](methods/cdr/cifar10_symmetric_cdr_smoke.yaml) 和 [`official_code`](methods/cdr/cifar10_symmetric_cdr_reproduction.yaml)；结合 recipe 检查 `cdr.noise_rate`、`cdr.l1_decay` 和 `cdr.critical_scope`，不能把 smoke 参数当作正式协议。
-- **CNLCU。** 把 [CNLCU-H 片段](algorithm/cnlcu_hard.yaml)的有效参数用在完整配置的 `cnlcu` 节中；窗口、最少观测数、fixed loss bound 和 corrected LOF 共同定义 hard 路径。相对地，[CNLCU-S](methods/cnlcu/cifar10_cnlcu_soft_smoke.yaml)使用固定长度 float32 loss history、soft uncertainty、线性 remember 日程以及 stable sample index 的并列裁决。
-- **Co-teaching / JoCoR。** 从 [Co-teaching 完整配置](methods/coteaching/cifar10_coteaching_smoke.yaml)检查实际噪声率与 remember schedule 的配对；改噪声设置时需重新核对 样本选择比例，而不是把 `noise.rate` 当成 keep rate。 [JoCoR](methods/jocor/jocor_cifar10_symmetric05_smoke.yaml) 的 `algorithm.name: jocor` / `algorithm.lambda` 与 `selector.name: small_loss` / `selector.keep_rate` 配套；floor 是选择计数规则。
-- **DSS / GCE。** [DSS 完整配置](methods/dss/dss_cifar10_symmetric05_reproduction.yaml)包含 warmup、MDA 和 CCS/masking 阶段，单个 loss 片段不能表达该流程。[GCE 完整配置](methods/gce/gce_cifar10_noise02_reproduction.yaml)使用 `loss.name: gce` 和 `loss.q` 控制目标形状；标准 GCE 不隐含截断阈值。
-- **Loss Correction。** 已知 T 的 forward correction 消费预先指定的转移矩阵；未知 T 的 [Anchor 两阶段配置](methods/loss-correction/loss_correction_cifar10_asymmetric04.yaml)先以正的 warmup 预算训练估计模型，再用 `pipeline.transition_estimator` 估计 T 并进入校正训练。仅把 estimator 名称写进一个片段不构成完整实验。
-- **MentorNet。** `pipeline.weight_provider` 配置 Student 消费的 MentorArtifact 及运行日程，如 percentile、decay、burn-in 和 dropout。旧自定义示例的 decay `0.5` 不等价于[正式 Student 配置](methods/mentornet/mentornet_dd_cifar100_symmetric04_reproduction.yaml)的 `0.95`；artifact 必须满足该 Student 的身份要求。
-- **IDN / PDL。** 通用 IDN 的入口是 Python `lnl_toolbox.noise.generators.generate_instance_dependent(labels, class_scores, rate, seed, dataset=...)`，其中分数形状为 `[N, C]`；旧 `score_weighted_idn` YAML 片段不是现行训练 schema 的噪声类型。PDL 的 Algorithm 2 噪声生成产生 noisy-label manifest，和 [PDL 训练配置](methods/pdl/pdl_cifar10_reproduction.yaml)的实例转移估计/校正不是同一步。
+- **基础 loss 与噪声。** 在 `loss` 下用 `name: ce` 选择 CE；在 `noise` 下用 `name: symmetric`、`rate` 和 `seed` 分别指定噪声类型、翻转率和随机种子。见 [CE + symmetric 完整示例](methods/supervised-baselines/cifar10-sym40-ce-smoke.yaml)。
+- **APL / NCE。** `loss.name: apl` 组合正权重 `alpha` / `beta` 与 `active.name: nce` / `passive.name: rce`。例如自定义 `loss.passive.log_zero: -4.0` 并不是[现行 APL 正式值](methods/apl/cifar10-sym20-reproduction.yaml) `log(1e-4)`。NCE 也可作为注册的独立 loss：使用 `loss.name: nce`，按需设置 `loss.eps`，字段见 [NCE 片段](algorithm/nce.yaml)。
+- **CDR。** `cdr.compatibility_mode` 区分 [`paper`](methods/cdr/cifar10-sym40-paper-smoke.yaml) 和 [`official_code`](methods/cdr/cifar10-sym40-official-code-reproduction.yaml)；结合 recipe 检查 `cdr.noise_rate`、`cdr.l1_decay` 和 `cdr.critical_scope`，不能把 smoke 参数当作正式协议。
+- **CNLCU。** 把 [CNLCU-H 片段](algorithm/cnlcu-hard.yaml)的有效参数用在完整配置的 `cnlcu` 节中；窗口、最少观测数、fixed loss bound 和 corrected LOF 共同定义 hard 路径。相对地，[CNLCU-S](methods/cnlcu/cifar10-sym40-soft-smoke.yaml)使用固定长度 float32 loss history、soft uncertainty、线性 remember 日程以及 stable sample index 的并列裁决。
+- **Co-teaching / JoCoR。** 从 [Co-teaching 完整配置](methods/coteaching/cifar10-sym40-smoke.yaml)检查实际噪声率与 remember schedule 的配对；改噪声设置时需重新核对 样本选择比例，而不是把 `noise.rate` 当成 keep rate。 [JoCoR](methods/jocor/cifar10-sym50-smoke.yaml) 的 `algorithm.name: jocor` / `algorithm.lambda` 与 `selector.name: small_loss` / `selector.keep_rate` 配套；floor 是选择计数规则。
+- **DSS / GCE。** [DSS 完整配置](methods/dss/cifar10-sym50-reproduction.yaml)包含 warmup、MDA 和 CCS/masking 阶段，单个 loss 片段不能表达该流程。[GCE 完整配置](methods/gce/cifar10-sym20-reproduction.yaml)使用 `loss.name: gce` 和 `loss.q` 控制目标形状；标准 GCE 不隐含截断阈值。
+- **Loss Correction。** [已知 T 的 forward 正式配置](methods/loss-correction/cifar10-class-conditional40-known-t-reproduction.yaml)使用预先指定的转移矩阵，不进行预训练；未知 T 的 [Anchor 两阶段 smoke](methods/supervised-baselines/cifar10-sym40-anchor-smoke.yaml)先以正的 warmup 预算训练估计模型，再用 `pipeline.transition_estimator` 估计 T 并进入校正训练。
+- **MentorNet。** `pipeline.weight_provider` 配置 Student 消费的 MentorArtifact 及运行日程，如 percentile、decay、burn-in 和 dropout。旧自定义示例的 decay `0.5` 不等价于[正式 Student 配置](methods/mentornet/cifar100-sym40-student-reproduction.yaml)的 `0.95`；artifact 必须满足该 Student 的身份要求。
+- **IDN / PDL。** 通用 IDN 的入口是 Python `lnl_toolbox.noise.generators.generate_instance_dependent(labels, class_scores, rate, seed, dataset=...)`，其中分数形状为 `[N, C]`；旧 `score_weighted_idn` YAML 片段不是现行训练 schema 的噪声类型。PDL 的 Algorithm 2 噪声生成产生 noisy-label manifest，和 [PDL 训练配置](methods/pdl/cifar10-pdl40-reproduction.yaml)的实例转移估计/校正不是同一步。
 
 CNLCU-H 和 NCE 两份保留片段不是完整实验，也不是完整算法配置库。它们不参与自动组合，不会改变正式 recipe；引用其中参数时须放入上面说明的配置上下文。
 
@@ -59,12 +151,12 @@ CNLCU-H 和 NCE 两份保留片段不是完整实验，也不是完整算法配�
 
 | 配置 | 验证边界 |
 | --- | --- |
-| [CWD 1 epoch](methods/cwd/support/cwd_cifar10_1epoch.yaml) | CIFAR-10 airplane/automobile，五折中的 fold 0，非 `binary_scalar`；一次运行不覆盖全部五折。 |
-| [FINE 1 epoch](methods/fine/support/fine_cifar100n_1epoch.yaml) | CIFAR-100 合成对称噪声；只走 warmup，不消费真实 CIFAR-100N 标签，也不验证 robust 阶段。 |
-| [L2RW 1 epoch](methods/l2rw/support/l2rw_cifar10_1epoch.yaml) | 需要配置指定的 audited trusted manifest；用来检查 bilevel 更新，不等同于完整实验。 |
-| [MC-LDCE 1 epoch](methods/mc-ldce/support/mc_ldce_cifar10_1epoch.yaml) | 包含真实 T 估计到主训练的交接；不以测试矩阵代替该阶段。 |
-| [MentorNet CIFAR-10 Student](methods/mentornet/support/mentornet_cifar10_symmetric04_1epoch.yaml) | 使用配置所指的冻结 MentorArtifact；不要假定与正式 CIFAR-100 Student 的 artifact 可互换。 |
-| [VolMin smoke](methods/volminnet/legacy/volmin_cifar10_smoke.yaml) / [reproduction](methods/volminnet/legacy/volmin_cifar10_reproduction.yaml) | 独立 `volmin` runner，联合学习模型和 T，以 clean validation 选择 checkpoint，保留原 `last.pt` / resume 合同。现行 `volminnet` 使用 noisy validation 并导出 best/last portable T；旧 VolMin 不是其前置步骤。 |
+| [CWD 1 epoch](methods/cwd/support/cifar10-airplane-automobile-rcn20-20-1epoch.yaml) | CIFAR-10 airplane/automobile，五折中的 fold 0，非 `binary_scalar`；一次运行不覆盖全部五折。 |
+| [FINE 1 epoch](methods/fine/support/cifar100-sym20-warmup-1epoch.yaml) | CIFAR-100 合成对称噪声；只走 warmup，不消费真实 CIFAR-100N 标签，也不验证 robust 阶段。 |
+| [L2RW 1 epoch](methods/l2rw/support/cifar10-sym40-audited-trusted-1epoch.yaml) | 需要配置指定的 audited trusted manifest；用来检查 bilevel 更新，不等同于完整实验。 |
+| [MC-LDCE 1 epoch](methods/mc-ldce/support/cifar10-sym20-estimated-t-1epoch.yaml) | 包含真实 T 估计到主训练的交接；不以测试矩阵代替该阶段。 |
+| [MentorNet CIFAR-10 Student](methods/mentornet/support/cifar10-sym40-student-1epoch.yaml) | 使用配置所指的冻结 MentorArtifact；不要假定与正式 CIFAR-100 Student 的 artifact 可互换。 |
+| [VolMin smoke](methods/volminnet/legacy/synthetic-multiclass-sym20-smoke.yaml) / [reproduction](methods/volminnet/legacy/cifar10-sym40-reproduction.yaml) | 独立 `volmin` runner，联合学习模型和 T，以 clean validation 选择 checkpoint，保留原 `last.pt` / resume 合同。现行 `volminnet` 使用 noisy validation 并导出 best/last portable T；旧 VolMin 不是其前置步骤。 |
 
 `lnl doctor` 检查正在运行的源码或安装包中的 **68 份已登记配置资源**，包括 conditional 定义；这不检查方法是否具备外部数据或 artifact。三份只打包、不登记的 YAML 由打包验证另行核验。工作目录无需包含旧 `configs/experiment/`；用户仍可在该目录保存自己的配置。用显式 `--config` 检查指定配置，加 `--check-data` 才请求该配置的数据检查。
 

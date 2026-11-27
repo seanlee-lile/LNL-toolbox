@@ -177,7 +177,7 @@ class ScratchFormulaTemplateTest(unittest.TestCase):
     def test_lend_recipe_selects_and_restores_noisy_validation_best(self) -> None:
         recipe = load_recipe(ROOT / "recipes" / "papers" / "lend.yaml")
         validate_recipe(recipe)
-        config_path = ROOT.parents[2] / "configs" / "methods" / "lend" / "lend_cifar10_reproduction.yaml"
+        config_path = ROOT.parents[2] / "configs" / "methods" / "lend" / "cifar10-sym40-reproduction.yaml"
         config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         epoch = next(step for step in recipe["steps"] if step["block"] == "epoch_loop")
         self.assertEqual(epoch["params"]["epochs"], config["lend"]["training"]["epochs"])

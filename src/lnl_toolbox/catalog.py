@@ -19,7 +19,7 @@ from lnl_toolbox.training.runners import RunnerSpec, resolve_runner
 
 
 _MENTORNET_TEACHER_CONFIG = Path(
-    "configs/methods/mentornet/producer/mentornet_dd_teacher_cifar10_symmetric04.yaml"
+    "configs/methods/mentornet/producer/cifar10-sym40-teacher-producer.yaml"
 )
 _MENTORNET_SMOKE_RECIPE = "mentornet-dd-cifar100-symmetric04-smoke"
 

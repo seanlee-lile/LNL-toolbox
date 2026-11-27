@@ -1137,7 +1137,7 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
     def test_registered_pcse_volmin_fixture_trains_without_parameter_replacement(self) -> None:
         from lnl_toolbox.catalog import validate_config
 
-        config = self._config('configs/methods/pcse/pcse_multiclass_volmin_smoke.yaml')
+        config = self._config('configs/methods/pcse/synthetic-multiclass-sym10-paper-volmin-smoke.yaml')
         original = deepcopy(config)
         self.assertEqual(validate_config(config).name, 'pcse')
         with tempfile.TemporaryDirectory() as directory:
@@ -1150,14 +1150,15 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
 
     def test_all_new_workflows_smoke_and_resume(self) -> None:
         paths = (
-            'configs/methods/mc-ldce/mc_ldce_cifar10_smoke.yaml',
-            'configs/methods/cal/cal_cifar10_smoke.yaml',
-            'configs/methods/ca2c/ca2c_cifar10_smoke.yaml',
+            'configs/methods/mc-ldce/synthetic-multiclass-sym10-smoke.yaml',
+            'configs/methods/cal/synthetic-multiclass-sym10-smoke.yaml',
+            'configs/methods/ca2c/synthetic-multiclass-sym10-smoke.yaml',
         )
         with tempfile.TemporaryDirectory() as directory:
             for path in paths:
-                name = Path(path).name
-                with self.subTest(name=name):
+                locator = Path(path)
+                run_path = Path(locator.parent.name) / locator.name
+                with self.subTest(name=run_path.as_posix()):
                     config = deepcopy(self._config(path))
                     if config['method'] == 'mc_ldce':
                         from lnl_toolbox.catalog import validate_config
@@ -1166,7 +1167,7 @@ class _new_paper_training_NewPaperTrainingTest(unittest.TestCase):
                         self.assertEqual(validate_config(config).name, 'mc_ldce')
                         _lifecycle(config)
                         config['trainer']['epochs'] = 2
-                    run_dir = run_experiment(config, Path(directory) / name)
+                    run_dir = run_experiment(config, Path(directory) / run_path)
                     checkpoint = run_dir / 'last.pt'
                     self.assertTrue(checkpoint.is_file())
                     self.assertTrue((run_dir / 'metrics.jsonl').is_file())

@@ -41,7 +41,7 @@ belong in the run directory and must not be committed.
 
 ## Formal configuration
 
-`configs/methods/dividemix/cifar10_dividemix_sym20.yaml` fixes:
+`configs/methods/dividemix/cifar10-sym20-reproduction.yaml` fixes:
 
 - full CIFAR-10 input with no sample-count limits;
 - a 5,000-example noisy-validation split and clean test split;

@@ -33,163 +33,79 @@ BASELINE = Path(__file__).with_name("fixtures") / "recipe_identity_baseline.json
 BASE_SHA = "c9a3234a03db7311c0dd70e6700ab5ae5971303a"
 CONFIG_DEST = "share/lnl-toolbox/configs/"
 # Approved moves only. Keep the on-disk baseline in its original layout.
+# Frozen paths are historical. Match each one to its current full locator.
 RELOCATIONS = {
-    f"configs/experiment/{filename}": f"configs/methods/{family}/{filename}"
-    for family, files in {
-        "apl": (
-            "apl_cifar10_noise02_reproduction.yaml",
-            "apl_cifar10_noise02_smoke.yaml",
-            "apl_cifar10_noise04_reproduction.yaml",
-        ),
-        "cdr": (
-            "cifar10_symmetric_cdr_reproduction.yaml",
-            "cifar10_symmetric_cdr_smoke.yaml",
-        ),
-        "dss": (
-            "dss_cifar10_symmetric05_reproduction.yaml",
-            "dss_cifar10_symmetric05_smoke.yaml",
-        ),
-        "gce": (
-            "gce_cifar10_noise02_reproduction.yaml",
-            "gce_cifar10_noise02_smoke.yaml",
-        ),
-        "binary-risk": (
-            "binary_risk_natarajan_1epoch.yaml",
-            "binary_risk_natarajan_reproduction.yaml",
-        ),
-        "ca2c": (
-            "ca2c_cifar100_reproduction.yaml",
-            "ca2c_cifar10_smoke.yaml",
-        ),
-        "clean": (
-            "cifar10_clean.yaml",
-            "cifar10_clean_baseline.yaml",
-            "cifar10_clean_smoke.yaml",
-        ),
-        "cnlcu": (
-            "cifar10_cnlcu_hard_smoke.yaml",
-            "cifar10_cnlcu_soft_smoke.yaml",
-            "cnlcu_cifar10_reproduction.yaml",
-        ),
-        "coteaching": (
-            "cifar10_coteaching_reproduction.yaml",
-            "cifar10_coteaching_smoke.yaml",
-        ),
-        "cwd": (
-            "cwd_cifar10_reproduction.yaml",
-            "cwd_cifar10_smoke.yaml",
-        ),
-        "dividemix": (
-            "cifar10_dividemix_smoke.yaml",
-        ),
-        "dual-t": (
-            "cifar10_dual_t_smoke.yaml",
-        ),
-        "dual-t/evidence": (
-            "cifar10_dual_t_evidence_smoke.yaml",
-        ),
-        "fine": (
-            "fine_cifar100n_reproduction.yaml",
-            "fine_cifar100n_smoke.yaml",
-        ),
-        "importance-reweighting": (
-            "importance_reweighting_binary_high_dim_smoke.yaml",
-            "importance_reweighting_binary_smoke.yaml",
-        ),
-        "jocor": (
-            "jocor_cifar10_symmetric05_reproduction.yaml",
-            "jocor_cifar10_symmetric05_smoke.yaml",
-        ),
-        "l2rw": (
-            "l2rw_cifar10_reproduction.yaml",
-            "l2rw_cifar10_smoke.yaml",
-        ),
-        "lend": (
-            "cifar10_lend_smoke.yaml",
-            "lend_cifar10_reproduction.yaml",
-        ),
-        "loss-correction": (
-            "loss_correction_cifar10_asymmetric04.yaml",
-        ),
-        "mc-ldce": (
-            "mc_ldce_cifar10_reproduction.yaml",
-            "mc_ldce_cifar10_smoke.yaml",
-        ),
-        "pdl": (
-            "pdl_cifar10_reproduction.yaml",
-            "pdl_cifar10_smoke.yaml",
-        ),
-        "supervised-baselines": (
-            "cifar10_foundation_smoke.yaml",
-            "cifar10_smoke.yaml",
-            "cifar10_symmetric_ce_smoke.yaml",
-            "cifar10_symmetric_small_loss_linear_smoke.yaml",
-            "cifar10_symmetric_small_loss_smoke.yaml",
-        ),
-        "t-revision": (
-            "cifar10_t_revision_smoke.yaml",
-        ),
-        "cal": (
-            "cal_cifar10_reproduction.yaml",
-            "cal_cifar10_smoke.yaml",
-        ),
-        "dld": (
-            "cifar10_dld_smoke.yaml",
-            "dld_cifar10_reproduction.yaml",
-        ),
-        "upm": (
-            "cifar10_upm_smoke.yaml",
-            "upm_cifar10_reproduction.yaml",
-        ),
-        "mentornet": (
-            "mentornet_dd_cifar100_symmetric04_reproduction.yaml",
-            "mentornet_dd_cifar100_symmetric04_smoke.yaml",
-        ),
-        "pcse": (
-            "pcse_multiclass_smoke.yaml",
-            "pcse_multiclass_volmin_smoke.yaml",
-        ),
-        "volminnet": (
-            "cifar10_volminnet_smoke.yaml",
-            "volminnet_cifar10_reproduction.yaml",
-        ),
-        "mentornet/producer": (
-            "mentornet_dd_teacher_cifar10_symmetric04.yaml",
-        ),
-    }.items()
-    for filename in files
-} | {
-    f"configs/reproduction/{filename}": f"configs/methods/{family}/{filename}"
-    for family, files in {
-        "cnlcu/support": (
-            "cifar10_cnlcu_soft_sym20_short.yaml",
-        ),
-        "dividemix": (
-            "cifar10_dividemix_sym20.yaml",
-        ),
-        "dual-t": (
-            "cifar10_dual_t_sym20.yaml",
-        ),
-        "dual-t/evidence": (
-            "cifar10_dual_t_sym20_evidence.yaml",
-        ),
-        "importance-reweighting": (
-            "importance_reweighting_binary_high_dim.yaml",
-            "importance_reweighting_binary_low_dim.yaml",
-            "uci_heart_importance_reweighting.yaml",
-        ),
-        "t-revision": (
-            "cifar10_t_revision_sym20_short.yaml",
-            "cifar10_t_revision_sym20_reproduction.yaml",
-        ),
-        "pcse": (
-            "cifar10_pcse_reproduction.yaml",
-        ),
-        "dld/support": (
-            "cifar10_dld_sym20_short.yaml",
-        ),
-    }.items()
-    for filename in files
+    "configs/experiment/apl_cifar10_noise02_reproduction.yaml": "configs/methods/apl/cifar10-sym20-reproduction.yaml",
+    "configs/experiment/apl_cifar10_noise02_smoke.yaml": "configs/methods/apl/cifar10-sym20-smoke.yaml",
+    "configs/experiment/apl_cifar10_noise04_reproduction.yaml": "configs/methods/apl/cifar10-sym40-reproduction.yaml",
+    "configs/experiment/binary_risk_natarajan_1epoch.yaml": "configs/methods/binary-risk/synthetic-binary-2d-rcn20-10-1epoch.yaml",
+    "configs/experiment/binary_risk_natarajan_reproduction.yaml": "configs/methods/binary-risk/synthetic-binary-2d-rcn40-40-reproduction.yaml",
+    "configs/experiment/ca2c_cifar10_smoke.yaml": "configs/methods/ca2c/synthetic-multiclass-sym10-smoke.yaml",
+    "configs/experiment/ca2c_cifar100_reproduction.yaml": "configs/methods/ca2c/cifar100-sym20-reproduction.yaml",
+    "configs/experiment/cal_cifar10_reproduction.yaml": "configs/methods/cal/cifar10-idn20-external-reproduction.yaml",
+    "configs/experiment/cal_cifar10_smoke.yaml": "configs/methods/cal/synthetic-multiclass-sym10-smoke.yaml",
+    "configs/experiment/cifar10_clean_baseline.yaml": "configs/methods/clean/cifar10-preact-resnet18-baseline.yaml",
+    "configs/experiment/cifar10_clean_smoke.yaml": "configs/methods/clean/cifar10-tinycnn-smoke.yaml",
+    "configs/experiment/cifar10_clean.yaml": "configs/methods/clean/cifar10-tinycnn-train.yaml",
+    "configs/experiment/cifar10_cnlcu_hard_smoke.yaml": "configs/methods/cnlcu/cifar10-sym40-hard-smoke.yaml",
+    "configs/experiment/cifar10_cnlcu_soft_smoke.yaml": "configs/methods/cnlcu/cifar10-sym40-soft-smoke.yaml",
+    "configs/experiment/cifar10_coteaching_reproduction.yaml": "configs/methods/coteaching/cifar10-sym20-reproduction.yaml",
+    "configs/experiment/cifar10_coteaching_smoke.yaml": "configs/methods/coteaching/cifar10-sym40-smoke.yaml",
+    "configs/experiment/cifar10_dividemix_smoke.yaml": "configs/methods/dividemix/cifar10-sym20-smoke.yaml",
+    "configs/experiment/cifar10_dld_smoke.yaml": "configs/methods/dld/cifar10-sym20-tinycnn-smoke.yaml",
+    "configs/experiment/cifar10_dual_t_evidence_smoke.yaml": "configs/methods/dual-t/evidence/cifar10-sym20-evidence-smoke.yaml",
+    "configs/experiment/cifar10_dual_t_smoke.yaml": "configs/methods/dual-t/cifar10-sym20-smoke.yaml",
+    "configs/experiment/cifar10_foundation_smoke.yaml": "configs/methods/supervised-baselines/cifar10-sym40-anchor-smoke.yaml",
+    "configs/experiment/cifar10_lend_smoke.yaml": "configs/methods/lend/cifar10-sym20-smoke.yaml",
+    "configs/experiment/cifar10_smoke.yaml": "configs/methods/supervised-baselines/cifar10-clean-ce-smoke.yaml",
+    "configs/experiment/cifar10_symmetric_cdr_reproduction.yaml": "configs/methods/cdr/cifar10-sym40-official-code-reproduction.yaml",
+    "configs/experiment/cifar10_symmetric_cdr_smoke.yaml": "configs/methods/cdr/cifar10-sym40-paper-smoke.yaml",
+    "configs/experiment/cifar10_symmetric_ce_smoke.yaml": "configs/methods/supervised-baselines/cifar10-sym40-ce-smoke.yaml",
+    "configs/experiment/cifar10_symmetric_small_loss_linear_smoke.yaml": "configs/methods/supervised-baselines/cifar10-sym40-small-loss-linear-smoke.yaml",
+    "configs/experiment/cifar10_symmetric_small_loss_smoke.yaml": "configs/methods/supervised-baselines/cifar10-sym40-small-loss-fixed-smoke.yaml",
+    "configs/experiment/cifar10_t_revision_smoke.yaml": "configs/methods/t-revision/cifar10-sym40-smoke.yaml",
+    "configs/experiment/cifar10_upm_smoke.yaml": "configs/methods/upm/cifar10-sym20-smoke.yaml",
+    "configs/experiment/cifar10_volminnet_smoke.yaml": "configs/methods/volminnet/cifar10-sym40-smoke.yaml",
+    "configs/experiment/cnlcu_cifar10_reproduction.yaml": "configs/methods/cnlcu/cifar10-sym20-soft-reproduction.yaml",
+    "configs/experiment/cwd_cifar10_reproduction.yaml": "configs/methods/cwd/cifar10-airplane-automobile-rcn20-20-scalar-reproduction.yaml",
+    "configs/experiment/cwd_cifar10_smoke.yaml": "configs/methods/cwd/cifar10-airplane-automobile-rcn20-20-smoke.yaml",
+    "configs/experiment/dld_cifar10_reproduction.yaml": "configs/methods/dld/cifar10-sym20-resnet34-external-reproduction.yaml",
+    "configs/experiment/dss_cifar10_symmetric05_reproduction.yaml": "configs/methods/dss/cifar10-sym50-reproduction.yaml",
+    "configs/experiment/dss_cifar10_symmetric05_smoke.yaml": "configs/methods/dss/cifar10-sym50-smoke.yaml",
+    "configs/experiment/fine_cifar100n_reproduction.yaml": "configs/methods/fine/cifar100-sym20-reproduction.yaml",
+    "configs/experiment/fine_cifar100n_smoke.yaml": "configs/methods/fine/cifar100-sym20-smoke.yaml",
+    "configs/experiment/gce_cifar10_noise02_reproduction.yaml": "configs/methods/gce/cifar10-sym20-reproduction.yaml",
+    "configs/experiment/gce_cifar10_noise02_smoke.yaml": "configs/methods/gce/cifar10-sym20-smoke.yaml",
+    "configs/experiment/importance_reweighting_binary_high_dim_smoke.yaml": "configs/methods/importance-reweighting/synthetic-binary-high-dim-rcn20-10-kliep-smoke.yaml",
+    "configs/experiment/importance_reweighting_binary_smoke.yaml": "configs/methods/importance-reweighting/synthetic-binary-2d-rcn20-10-kde-smoke.yaml",
+    "configs/experiment/jocor_cifar10_symmetric05_reproduction.yaml": "configs/methods/jocor/cifar10-sym50-reproduction.yaml",
+    "configs/experiment/jocor_cifar10_symmetric05_smoke.yaml": "configs/methods/jocor/cifar10-sym50-smoke.yaml",
+    "configs/experiment/l2rw_cifar10_reproduction.yaml": "configs/methods/l2rw/cifar10-uniformflip40-reproduction.yaml",
+    "configs/experiment/l2rw_cifar10_smoke.yaml": "configs/methods/l2rw/synthetic-multiclass-sym20-smoke.yaml",
+    "configs/experiment/lend_cifar10_reproduction.yaml": "configs/methods/lend/cifar10-sym40-reproduction.yaml",
+    "configs/experiment/loss_correction_cifar10_asymmetric04.yaml": "configs/methods/loss-correction/cifar10-class-conditional40-known-t-reproduction.yaml",
+    "configs/experiment/mc_ldce_cifar10_reproduction.yaml": "configs/methods/mc-ldce/cifar10-sym20-reproduction.yaml",
+    "configs/experiment/mc_ldce_cifar10_smoke.yaml": "configs/methods/mc-ldce/synthetic-multiclass-sym10-smoke.yaml",
+    "configs/experiment/mentornet_dd_cifar100_symmetric04_reproduction.yaml": "configs/methods/mentornet/cifar100-sym40-student-reproduction.yaml",
+    "configs/experiment/mentornet_dd_cifar100_symmetric04_smoke.yaml": "configs/methods/mentornet/cifar100-sym40-student-smoke.yaml",
+    "configs/experiment/mentornet_dd_teacher_cifar10_symmetric04.yaml": "configs/methods/mentornet/producer/cifar10-sym40-teacher-producer.yaml",
+    "configs/experiment/pcse_multiclass_smoke.yaml": "configs/methods/pcse/synthetic-multiclass-sym10-dual-t-smoke.yaml",
+    "configs/experiment/pcse_multiclass_volmin_smoke.yaml": "configs/methods/pcse/synthetic-multiclass-sym10-paper-volmin-smoke.yaml",
+    "configs/experiment/pdl_cifar10_reproduction.yaml": "configs/methods/pdl/cifar10-pdl40-reproduction.yaml",
+    "configs/experiment/pdl_cifar10_smoke.yaml": "configs/methods/pdl/cifar10-pdl40-smoke.yaml",
+    "configs/experiment/upm_cifar10_reproduction.yaml": "configs/methods/upm/cifar10-sym40-reproduction.yaml",
+    "configs/experiment/volminnet_cifar10_reproduction.yaml": "configs/methods/volminnet/cifar10-sym20-reproduction.yaml",
+    "configs/reproduction/cifar10_cnlcu_soft_sym20_short.yaml": "configs/methods/cnlcu/support/cifar10-sym20-soft-short.yaml",
+    "configs/reproduction/cifar10_dividemix_sym20.yaml": "configs/methods/dividemix/cifar10-sym20-reproduction.yaml",
+    "configs/reproduction/cifar10_dld_sym20_short.yaml": "configs/methods/dld/support/cifar10-sym20-resnet34-external-short.yaml",
+    "configs/reproduction/cifar10_dual_t_sym20_evidence.yaml": "configs/methods/dual-t/evidence/cifar10-sym20-evidence-reproduction.yaml",
+    "configs/reproduction/cifar10_dual_t_sym20.yaml": "configs/methods/dual-t/cifar10-sym20-reproduction.yaml",
+    "configs/reproduction/cifar10_pcse_reproduction.yaml": "configs/methods/pcse/cifar10-sym40-paper-volmin-reproduction.yaml",
+    "configs/reproduction/cifar10_t_revision_sym20_reproduction.yaml": "configs/methods/t-revision/cifar10-sym20-reproduction.yaml",
+    "configs/reproduction/cifar10_t_revision_sym20_short.yaml": "configs/methods/t-revision/cifar10-sym20-short.yaml",
+    "configs/reproduction/importance_reweighting_binary_high_dim.yaml": "configs/methods/importance-reweighting/synthetic-binary-high-dim-rcn20-10-kliep-reproduction.yaml",
+    "configs/reproduction/importance_reweighting_binary_low_dim.yaml": "configs/methods/importance-reweighting/synthetic-binary-2d-rcn20-10-kde-reproduction.yaml",
+    "configs/reproduction/uci_heart_importance_reweighting.yaml": "configs/methods/importance-reweighting/uci-statlog-heart-rcn30-10-kliep-experiment.yaml",
 }
 VIEWS = ((False, False), (False, True), (True, False), (True, True))
 PAPER_VARIANT_BATCH = {

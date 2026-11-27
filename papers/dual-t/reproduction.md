@@ -29,7 +29,7 @@ Run the production Dual-T workflow:
 ```powershell
 $env:PYTHONPATH = "src"
 lnl run `
-  --config configs/methods/dual-t/cifar10_dual_t_sym20.yaml `
+  --config configs/methods/dual-t/cifar10-sym20-reproduction.yaml `
   --output-dir artifacts/reproductions/cifar10-dual-t-sym20-seed1
 ```
 
@@ -38,7 +38,7 @@ Run the standalone evidence chain:
 ```powershell
 $env:PYTHONPATH = "src"
 python scripts/run_dual_t_evidence.py `
-  --config configs/methods/dual-t/evidence/cifar10_dual_t_sym20_evidence.yaml `
+  --config configs/methods/dual-t/evidence/cifar10-sym20-evidence-reproduction.yaml `
   --output-dir artifacts/reproductions/cifar10-dual-t-sym20-evidence-seed1
 ```
 
@@ -96,8 +96,8 @@ the paper prescribed this exact DT-Forward optimization setup.
 
 ## Smoke Versus Formal Configurations
 
-`configs/methods/dual-t/cifar10_dual_t_smoke.yaml` and
-`configs/methods/dual-t/evidence/cifar10_dual_t_evidence_smoke.yaml` verify lifecycle,
+`configs/methods/dual-t/cifar10-sym20-smoke.yaml` and
+`configs/methods/dual-t/evidence/cifar10-sym20-evidence-smoke.yaml` verify lifecycle,
 artifact, fairness, and resume behavior. They use TinyCNN, small dataset
 subsets, CPU execution, and short epoch counts. Their accuracy and matrix
 errors are pipeline diagnostics only.
@@ -113,7 +113,7 @@ Run the validation sequence in this order:
 1. Run the existing production and evidence smoke configurations.
 2. Run a short GPU sanity using the smoke configuration on CUDA and inspect
    checkpoint, snapshot, transition artifact, and resume behavior.
-3. Run one full seed with `cifar10_dual_t_sym20.yaml`.
+3. Run one full seed with `cifar10-sym20-reproduction.yaml`.
 4. Run the formal evidence configuration and compare ordinary T versus
    Dual-T matrix error and T-Forward versus DT-Forward clean-test accuracy.
 5. Repeat the formal configurations for five explicitly recorded seeds and
