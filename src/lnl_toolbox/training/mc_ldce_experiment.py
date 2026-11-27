@@ -91,7 +91,11 @@ def _lifecycle(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _prepare_classifier(model: nn.Module) -> None:
-    classifier = getattr(model, "classifier", None)
+    head_name = "classifier"
+    classifier = getattr(model, head_name, None)
+    if not isinstance(classifier, nn.Linear):
+        head_name = "fc"
+        classifier = getattr(model, head_name, None)
     if not isinstance(classifier, nn.Linear):
         raise TypeError("MC-LDCE requires a direct linear classifier")
     if classifier.bias is not None:
@@ -102,17 +106,16 @@ def _prepare_classifier(model: nn.Module) -> None:
             device=classifier.weight.device,
             dtype=classifier.weight.dtype,
         )
-        model.classifier = replacement
-        classifier = replacement
+        setattr(model, head_name, replacement)
     for parameter in model.parameters():
         parameter.requires_grad_(True)
 
 
-def _estimate_volmin(config, model, loader, device, validation_loader=None, run_dir=None):
+def _estimate_volmin(config, model, loader, device, validation_loader=None, run_dir=None, *, num_classes):
     value = dict(config["transition"])
     parameterization = dict(value["parameterization"])
     transition_model = PaperVolMinTransition(
-        int(value["num_classes"]),
+        num_classes,
         initial_weight=float(parameterization["initial_weight"]),
         seed=int(parameterization["seed"]),
     ).to(device)
@@ -239,7 +242,8 @@ def run_mc_ldce_experiment(
             prepared.num_classes,
         ).to(device)
         matrix, transition_metadata = _estimate_volmin(
-            config, estimator_model, train_loader, device, validation_loader, run_dir
+            config, estimator_model, train_loader, device, validation_loader, run_dir,
+            num_classes=prepared.num_classes,
         )
         del estimator_model
         _prepare_classifier(model)

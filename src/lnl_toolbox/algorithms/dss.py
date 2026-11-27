@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any
 
@@ -29,6 +30,8 @@ class DSSObjective:
         mda: bool = True,
         ccs: bool = True,
     ) -> None:
+        self._sample_ids: Tensor | None = None
+        self._sample_ids_digest: str | None = None
         self.selector = DSSSelectorState(
             num_samples,
             num_classes,
@@ -39,6 +42,13 @@ class DSSObjective:
             mda=mda,
             ccs=ccs,
         )
+
+    def bind_sample_ids(self, sample_ids: Tensor) -> None:
+        ids = torch.as_tensor(sample_ids, dtype=torch.long, device="cpu").sort().values
+        if ids.ndim != 1 or ids.numel() != self.selector.num_samples or ids.unique_consecutive().numel() != ids.numel():
+            raise ValueError("DSS requires one unique global ID per training sample")
+        self._sample_ids = ids
+        self._sample_ids_digest = hashlib.sha256(ids.numpy().astype("<i8", copy=False).tobytes()).hexdigest()
 
     def on_cycle_start(self, state: Any) -> None:
         self.selector.on_cycle_start(int(state.cycle))
@@ -57,6 +67,12 @@ class DSSObjective:
     ) -> ObjectiveResult:
         del base_loss
         epoch = int(metadata["epoch"])
+        if self._sample_ids is not None:
+            global_ids = sample_indices.detach().to(device="cpu", dtype=torch.long)
+            slots = torch.searchsorted(self._sample_ids, global_ids.contiguous())
+            if bool((slots >= self._sample_ids.numel()).any()) or not torch.equal(self._sample_ids[slots], global_ids):
+                raise ValueError("DSS batch contains an ID outside the training split")
+            sample_indices = slots
         selected_cpu, excluded_cpu = self.selector.masks(
             sample_indices, noisy_targets
         )
@@ -85,9 +101,14 @@ class DSSObjective:
         )
 
     def state_dict(self) -> dict[str, Any]:
-        return {"selector": self.selector.state_dict()}
+        state = {"selector": self.selector.state_dict()}
+        if self._sample_ids_digest is not None:
+            state["sample_ids_digest"] = self._sample_ids_digest
+        return state
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if state.get("sample_ids_digest") != self._sample_ids_digest:
+            raise ValueError("DSS checkpoint does not match the training sample ID mapping")
         selector_state = state.get("selector")
         if not isinstance(selector_state, Mapping):
             raise ValueError("DSS objective state is missing selector state")

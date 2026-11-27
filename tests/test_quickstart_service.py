@@ -304,6 +304,7 @@ class QuickStartServiceTests(unittest.TestCase):
         noise = QuickStartNoiseSelection("synthetic", "symmetric", rate=.2, seed=19)
         methods = {option.paper_id: option for option in self.service.method_options(dataset.alias, noise)}
         gce = QuickStartEditor(methods["gce"], self.service, dataset, noise, {})
+        self._check_inline_schedule(gce)
         gce.advanced = True
         model_card = next(field for kind, field in gce.plan_entries() if kind == "group" and field["path"] == "model")
         self.assertEqual({field["path"] for field in model_card["children"]},
@@ -347,6 +348,47 @@ class QuickStartServiceTests(unittest.TestCase):
         self.assertFalse(l2rw.schedule_groups()["scheduler"]["enabled"])
         l2rw.toggle_schedule("scheduler")
         self.assertEqual(l2rw.schedule_groups()["scheduler"]["node"]["value"], [40000, 60000])
+
+    def _check_inline_schedule(self, editor):
+        import asyncio
+
+        from prompt_toolkit.data_structures import Size
+        from prompt_toolkit.input import create_pipe_input
+        from prompt_toolkit.output import DummyOutput
+
+        class Output(DummyOutput):
+            def get_size(self):
+                return Size(rows=30, columns=120)
+
+        async def wait_until(predicate):
+            while not predicate():
+                await asyncio.sleep(.02)
+
+        async def drive():
+            with create_pipe_input() as pipe:
+                workspace = editor.workspace(input=pipe, output=Output())
+                app = workspace.app
+                task = asyncio.create_task(app.run_async(set_exception_handler=False))
+                try:
+                    await asyncio.wait_for(wait_until(lambda: app.is_running), 3)
+                    self.assertEqual(workspace.selected_schedule()["path"], "scheduler")
+                    self.assertIn("40", "".join(row[1] for row in workspace.schedule_rows()))
+                    pipe.send_text("\r")
+                    await asyncio.wait_for(wait_until(lambda: app.layout.has_focus(workspace.schedule_control)), 3)
+                    self.assertFalse(workspace.modals)
+                    pipe.send_text("\r")
+                    await asyncio.wait_for(wait_until(lambda: editor.draft.get("scheduler.name") == "none"), 3)
+                    self.assertFalse(workspace.modals)
+                    pipe.send_text("\x1b[D")
+                    await asyncio.wait_for(wait_until(lambda: app.layout.has_focus(workspace.list_control)), 3)
+                    pipe.send_text("\x1a")
+                    await asyncio.wait_for(wait_until(lambda: not editor.draft), 3)
+                finally:
+                    if app.is_running:
+                        app.exit()
+                    await asyncio.wait_for(task, 3)
+
+        asyncio.run(drive())
 
     def test_noise_options_are_capability_based(self) -> None:
         result = self.service.noise_options("local-cifar10")
@@ -678,7 +720,13 @@ class QuickStartServiceTests(unittest.TestCase):
                 self.assertEqual(noise, {"name": "symmetric", "rate": 0.27, "seed": 43})
 
     def test_no_corruption_preserves_label_contract_for_every_paper(self) -> None:
-        profile = self.data_service.inspect("local-cifar10").profile.to_dict()
+        root = Path(self.temp.name)
+        data_service = DataService(
+            registry=DatasetRegistry((_FakeTenClassImageAdapter(),)),
+            catalog=LocalDatasetCatalog(root / "ten-class-catalog.json"),
+        )
+        data_service.register("local-cifar10", "cifar10", {"root": str(self.data_root)})
+        profile = data_service.inspect("local-cifar10").profile.to_dict()
         for paper in load_papers():
             template = method_template_for_paper(paper)
             for kind in ("clean", "native"):
@@ -687,7 +735,7 @@ class QuickStartServiceTests(unittest.TestCase):
                         template.config, dataset_alias="local-cifar10",
                         dataset_profile=profile,
                         noise_selection=QuickStartNoiseSelection(kind, kind, rate=None if kind == "clean" else 0.2),
-                        data_service=self.data_service,
+                        data_service=data_service,
                     )
                     original = template.config.get("noise", {}) or {}
                     if kind == "native" and paper.id == "loss-correction":

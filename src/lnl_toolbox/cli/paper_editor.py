@@ -330,6 +330,7 @@ class _PaperWorkspace:
         self.editor = editor
         self.output = output or create_output()
         self.selected = 0
+        self.schedule_index = 0
         self.modals = []
         self.button_handlers = {}
         self.busy = False
@@ -346,25 +347,32 @@ class _PaperWorkspace:
         self.list_window = Window(self.list_control, wrap_lines=False)
         self.detail_control = FormattedTextControl(self.details)
         self.detail_window = Window(self.detail_control, wrap_lines=True)
+        self.schedule_control = FormattedTextControl(
+            self.schedule_rows, focusable=True, get_cursor_position=self.schedule_cursor,
+        )
+        def detail_pane(fallback, schedule_height=None):
+            schedule_window = Window(self.schedule_control, wrap_lines=False, height=schedule_height)
+            return Frame(DynamicContainer(lambda: schedule_window if self.selected_schedule() else fallback),
+                         title=lambda: text("学习率设置", "Learning rate") if self.selected_schedule()
+                         else text("参数说明", "Description"))
+
         wide = VSplit([Frame(self.list_window, title=lambda: self.group_title()),
-                       Frame(self.detail_window, title=lambda: text("参数说明", "Description"))], padding=1)
+                       detail_pane(self.detail_window)], padding=1)
         narrow = HSplit([Frame(self.list_window, title=lambda: self.group_title()),
-                         Frame(Window(self.detail_control, height=4, wrap_lines=True),
-                               title=lambda: text("参数说明", "Description"))])
+                         detail_pane(Window(self.detail_control, height=4, wrap_lines=True), schedule_height=8)])
         body = DynamicContainer(lambda: wide if self.output.get_size().columns >= 100 else narrow)
         self.root = FloatContainer(content=HSplit([
             Window(FormattedTextControl(self.header), height=2, style="class:header"),
             self.search,
             body,
             Window(FormattedTextControl(self.status_text), height=3, wrap_lines=True),
-            Window(FormattedTextControl(lambda: text(
-                " ↑↓ 选择  Enter 编辑  Tab 切换  Ctrl+F 搜索  / 操作  Esc 返回  ? 帮助",
-                " Up/Down Select  Enter Edit  Tab Focus  Ctrl+F Search  / Actions  Esc Back  ? Help")),
+            Window(FormattedTextControl(self.footer),
                 height=2, wrap_lines=True, style="class:footer"),
         ]), floats=[])
         kb = KeyBindings()
         browsing = Condition(lambda: not self.modals and not self.busy)
         on_list = browsing & Condition(lambda: self.app.layout.has_focus(self.list_control))
+        on_schedule = browsing & Condition(lambda: self.app.layout.has_focus(self.schedule_control))
         modal = Condition(lambda: bool(self.modals))
         movable = modal & Condition(lambda: bool(self.modals[-1].get("move")))
 
@@ -372,34 +380,52 @@ class _PaperWorkspace:
         def up(event):
             if self.modals:
                 self.modals[-1]["move"](-1)
+            elif on_schedule():
+                self.move_schedule_selection(-1)
             else:
                 self.selected = max(0, self.selected - 1)
+                self.schedule_index = 0
                 self.app.layout.focus(self.list_control)
 
         @kb.add("down", filter=browsing | movable)
         def down(event):
             if self.modals:
                 self.modals[-1]["move"](1)
+            elif on_schedule():
+                self.move_schedule_selection(1)
             else:
                 self.selected = min(max(0, len(self.entries) - 1), self.selected + 1)
+                self.schedule_index = 0
                 self.app.layout.focus(self.list_control)
 
         @kb.add("pageup", filter=on_list)
         def page_up(event):
             self.selected = max(0, self.selected - 10)
+            self.schedule_index = 0
 
         @kb.add("pagedown", filter=on_list)
         def page_down(event):
             self.selected = min(max(0, len(self.entries) - 1), self.selected + 10)
+            self.schedule_index = 0
 
         @kb.add("enter", filter=browsing | modal, eager=True)
         def enter(event):
             if self.modals:
                 self.modals[-1]["submit"]()
+            elif on_schedule():
+                self.launch(self.edit_schedule_option())
             elif not self.app.layout.has_focus(self.list_control):
                 self.app.layout.focus(self.list_control)
             else:
                 self.launch(self.edit_selected())
+
+        @kb.add("right", filter=on_list & Condition(lambda: self.selected_schedule() is not None))
+        def focus_schedule(event):
+            self.app.layout.focus(self.schedule_control)
+
+        @kb.add("left", filter=on_schedule)
+        def focus_parameter_list(event):
+            self.app.layout.focus(self.list_control)
 
         @kb.add("tab", eager=True)
         def tab(event):
@@ -449,6 +475,8 @@ class _PaperWorkspace:
                 self.modals[-1]["finish"](None)
             elif self.busy:
                 self.set_status(text("正在检查，请稍候。", "A check is running; please wait."))
+            elif on_schedule():
+                self.app.layout.focus(self.list_control)
             elif self.search.text:
                 self.search.text = ""
                 self.app.layout.focus(self.list_control)
@@ -484,6 +512,10 @@ class _PaperWorkspace:
                             if query in f["path"].casefold()
                             or (kind == "field" and query in self.editor.note(f).casefold())]
         self.selected = 0 if reset else min(self.selected, max(0, len(self.entries) - 1))
+        if reset:
+            self.schedule_index = 0
+        if not self.selected_schedule() and hasattr(self, "app") and self.app.layout.has_focus(self.schedule_control):
+            self.app.layout.focus(self.list_control)
         if hasattr(self, "app"):
             self.app.invalidate()
 
@@ -502,6 +534,17 @@ class _PaperWorkspace:
         return f" LNL Toolbox / {self.editor.paper.acronym}    {dataset}\n " + text(
             f"已修改 {len(self.editor.changes())} 项 / " + ("未保存" if dirty else "无未保存修改"),
             f"{len(self.editor.changes())} changes / " + ("unsaved" if dirty else "no unsaved changes"))
+
+    def footer(self):
+        if self.selected_schedule():
+            return text(
+                " ↑↓ 选择  → / Tab 进入学习率设置  Enter 编辑  ← 返回参数列表",
+                " Up/Down Select  Right / Tab Focus schedule  Enter Edit  Left Back to parameters",
+            )
+        return text(
+            " ↑↓ 选择  Enter 编辑  Tab 切换  Ctrl+F 搜索  / 操作  Esc 返回  ? 帮助",
+            " Up/Down Select  Enter Edit  Tab Focus  Ctrl+F Search  / Actions  Esc Back  ? Help",
+        )
 
     def rows(self):
         changed = {path for path, _, _ in self.editor.changes()}
@@ -529,6 +572,8 @@ class _PaperWorkspace:
             def select(event, index=index):
                 from prompt_toolkit.mouse_events import MouseEventType
                 if event.event_type == MouseEventType.MOUSE_UP:
+                    if self.selected != index:
+                        self.schedule_index = 0
                     self.selected = index
                     self.app.layout.focus(self.list_control)
                 else:
@@ -779,7 +824,7 @@ class _PaperWorkspace:
                 return
         if kind == "schedule":
             if self.editor.guided:
-                await self.guided_schedule(field["path"])
+                self.app.layout.focus(self.schedule_control)
             else:
                 await self.schedule(field)
             return
@@ -920,8 +965,14 @@ class _PaperWorkspace:
         unit = text("步", "steps") if group["stepped"] else text("轮", "epochs")
         return f"{mode} / {budget} {unit}" if budget is not None else mode
 
-    async def guided_schedule(self, prefix):
-        group = self.editor.schedule_groups()[prefix]
+    def selected_schedule(self):
+        if self.editor.guided and self.entries:
+            kind, field = self.entries[self.selected]
+            if kind == "schedule":
+                return field
+        return None
+
+    def schedule_options(self, group):
         fields = group["fields"]
         options = []
         if "none" in group["choices"]:
@@ -939,7 +990,7 @@ class _PaperWorkspace:
             options.append((f"{text('起始学习率', 'Initial learning rate')} = {base['value']}", base["path"]))
         node = group["node"]
         if group["enabled"] and has_nodes and node is not None:
-            options.append((f"{text('学习率节点', 'Milestones')} {node['value']}", "nodes"))
+            options.extend(self.schedule_node_options(group))
         if group["enabled"]:
             active = self.editor.active_schedule_fields(group)
             for suffix, field in fields.items():
@@ -952,7 +1003,9 @@ class _PaperWorkspace:
                     if budget is not None:
                         value = max(1, budget - warmup)
                 options.append((f"{field.get('label', field['path'])} = {value}", field["path"]))
-        options.append((text("返回运行计划", "Back to run plan"), None))
+        return options
+
+    def schedule_note(self, group):
         note = self.schedule_label(group)
         if "none" not in group["choices"]:
             note += "\n" + text("此阶段的学习率变化方式由训练端固定。", "The training method fixes this schedule mode.")
@@ -962,7 +1015,49 @@ class _PaperWorkspace:
             if budget is not None:
                 note += "\n" + text(f"预热 {warmup} 轮，余弦下降 {max(1, budget-warmup)} 轮。",
                                      f"Warmup: {warmup} epochs. Cosine decay: {max(1, budget-warmup)} epochs.")
-        choice = await self.pick(prefix, options, note=note)
+        return note
+
+    def move_schedule_selection(self, delta=0):
+        group = self.selected_schedule()
+        options = self.schedule_options(group) if group else []
+        self.schedule_index = max(0, min(len(options) - 1, self.schedule_index + delta))
+        return options
+
+    def schedule_cursor(self):
+        from prompt_toolkit.data_structures import Point
+
+        group = self.selected_schedule()
+        if not group:
+            return Point(0, 0)
+        self.move_schedule_selection()
+        return Point(0, len(self.schedule_note(group).splitlines()) + self.schedule_index)
+
+    def schedule_rows(self):
+        from prompt_toolkit.mouse_events import MouseEventType
+
+        group = self.selected_schedule()
+        if not group:
+            return []
+        options = self.move_schedule_selection()
+        rows = [("class:muted", self.schedule_note(group) + "\n")]
+        for index, (label, _) in enumerate(options):
+            def select(event, index=index):
+                if event.event_type != MouseEventType.MOUSE_UP or self.modals or self.busy:
+                    return NotImplemented
+                self.schedule_index = index
+                self.app.layout.focus(self.schedule_control)
+            selected = index == self.schedule_index and self.app.layout.has_focus(self.schedule_control)
+            rows.append(("class:selected" if selected else "", f" {'›' if selected else ' '} {label}\n", select))
+        return rows
+
+    async def edit_schedule_option(self):
+        group = self.selected_schedule()
+        options = self.move_schedule_selection()
+        if not options:
+            return
+        prefix = group["path"]
+        base = group["base"]
+        _, choice = options[self.schedule_index]
         if choice == "toggle":
             self.change(lambda: self.editor.toggle_schedule(prefix))
         elif choice == "segment":
@@ -973,8 +1068,8 @@ class _PaperWorkspace:
             ], default=group["value"])
             if mode is not None:
                 self.change(lambda: self.editor.set_schedule_mode(prefix, mode))
-        elif choice == "nodes":
-            await self.guided_schedule_nodes(group)
+        elif isinstance(choice, tuple):
+            await self.edit_schedule_node(group, choice)
         elif choice is not None:
             field = self.editor._visible()[choice]
             if not field["editable"]:
@@ -984,9 +1079,8 @@ class _PaperWorkspace:
             if value is not None:
                 self.change(lambda: self.editor.update([(choice, None if value is _CLEAR_VALUE else value)]))
 
-    async def guided_schedule_nodes(self, group):
-        import math
-
+    @staticmethod
+    def schedule_node_values(group):
         fields = group["fields"]
         node = group["node"]
         nodes = list(node["value"] or [])
@@ -998,19 +1092,31 @@ class _PaperWorkspace:
             float(f"{base * (gamma['value'] if gamma else .1) ** (i + 1):.7g}") if base is not None else None
             for i in range(len(nodes))
         ]
+        return nodes, rates, explicit, base
+
+    def schedule_node_options(self, group):
+        node = group["node"]
+        nodes, rates, _, _ = self.schedule_node_values(group)
         options = []
         for index, point in enumerate(nodes):
-            options.append((f"{text('节点', 'Milestone')} {index+1}  {point}", ("node", index)))
+            unit = text("步", "steps") if group["stepped"] else text("轮", "epochs")
+            options.append((f"{text('节点', 'Milestone')} {index+1}  {point} {unit}", ("node", index)))
             if group["segmented"] and index < len(rates) and rates[index] is not None:
-                options.append((f"  {text('学习率', 'Learning rate')}  {rates[index]}", ("rate", index)))
+                options.append((f"  {text('节点后学习率', 'Learning rate after milestone')} = {rates[index]}", ("rate", index)))
             if node["editable"]:
                 options.append((f"  {text('移除节点', 'Remove milestone')} {index+1}", ("remove", index)))
         if node["editable"]:
             options.append((text("添加节点", "Add milestone"), ("add", None)))
-        options.append((text("返回", "Back"), None))
-        action = await self.pick(group["path"], options, note=self.schedule_label(group))
-        if action is None:
-            return
+        return options
+
+    async def edit_schedule_node(self, group, action):
+        import math
+
+        fields = group["fields"]
+        node = group["node"]
+        rates_field = fields.get("lr_values")
+        gamma = fields.get("gamma")
+        nodes, rates, explicit, base = self.schedule_node_values(group)
         operation, index = action
         if operation == "rate":
             def rate_value(raw):

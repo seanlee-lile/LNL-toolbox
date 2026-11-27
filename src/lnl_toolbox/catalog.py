@@ -718,6 +718,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
             return False
 
     rules = {
+        "percentile_100": ("null or a percentile from 0 to 100", lambda v: v is None or number(v) and 0 <= v <= 100),
         "integer": ("an integer >= 0", lambda v: type(v) is int and v >= 0),
         "positive_integer": ("an integer > 0", lambda v: type(v) is int and v > 0),
         "number": ("a finite number", number),
@@ -752,6 +753,7 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
     leaf_rules = {name: kind for kind, names in leaf_groups.items() for name in names.split()}
     # Exact overrides distinguish parameters sharing a spelling but not a domain.
     exact = {
+        "pipeline.transition_estimator.percentile": "percentile_100",
         "t_revision.transition_initialization.percentile": "positive",
         "trainer.epochs": "positive_integer",
         "seed": "seed",

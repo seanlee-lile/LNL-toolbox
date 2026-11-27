@@ -100,6 +100,19 @@ class _mc_ldce_MCLDCETest(unittest.TestCase):
         self.assertEqual(tuple(output.logits.shape), (2, 10))
         self.assertEqual(tuple(output.features.shape), (2, 128))
 
+    def test_imagenet_resnet_exposes_features_after_bias_free_classifier_setup(self) -> None:
+        from lnl_toolbox.training.experiment import build_model
+
+        model = build_model({'name': 'resnet18', 'variant': 'imagenet_standard'}, 14).eval()
+        _prepare_classifier(model)
+        self.assertIsNone(model.fc.bias)
+        inputs = torch.zeros(2, 3, 32, 32)
+        with torch.no_grad():
+            output = model.forward_with_features(inputs)
+            torch.testing.assert_close(output.logits, model(inputs))
+        self.assertEqual(tuple(output.features.shape), (2, 512))
+        self.assertEqual(tuple(output.logits.shape), (2, 14))
+
     def test_joint_stage_keeps_convolutions_trainable_and_dropout_active(self) -> None:
         torch.manual_seed(3)
         model = MCLDCECifarCNN(10)

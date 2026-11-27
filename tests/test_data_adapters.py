@@ -81,18 +81,22 @@ class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
     def test_clothing1m_and_animal10n_lazy_file_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            image = root / 'sample.jpg'
-            Image.new('RGB', (4, 4), 'white').save(image)
-            for name in ('noisy_train_key_list.txt', 'clean_val_key_list.txt', 'clean_test_key_list.txt'):
-                (root / name).write_text('sample.jpg\n', encoding='utf-8')
-            (root / 'noisy_label_kv.txt').write_text('sample.jpg 3\n', encoding='utf-8')
-            (root / 'clean_label_kv.txt').write_text('sample.jpg 3\n', encoding='utf-8')
+            for split in ('noisy_train', 'clean_train', 'clean_val', 'clean_test'):
+                Image.new('RGB', (4, 4), 'white').save(root / f'{split}.jpg')
+                (root / f'{split}_key_list.txt').write_text(f'{split}.jpg\n', encoding='utf-8')
+            (root / 'noisy_label_kv.txt').write_text('noisy_train.jpg 3\n', encoding='utf-8')
+            (root / 'clean_label_kv.txt').write_text(
+                'clean_train.jpg 8\nclean_val.jpg 3\nclean_test.jpg 3\n', encoding='utf-8',
+            )
             clothing = Clothing1MAdapter()
             clothing.validate(DataSpec('clothing1m', root=root))
             train = clothing.load(DataSpec('clothing1m', root=root), 'train', seed=1)
             test = clothing.load(DataSpec('clothing1m', root=root), 'test', seed=1)
+            clean_train = clothing.load(DataSpec('clothing1m', root=root), 'clean_train', seed=1)
             self.assertIsNone(train.clean_targets)
             self.assertEqual(test.clean_targets.tolist(), [3])
+            self.assertEqual(clean_train.clean_targets.tolist(), [8])
+            self.assertEqual(clean_train.global_indices.tolist(), [3])
             service = DataService(
                 DatasetRegistry((clothing,)),
                 LocalDatasetCatalog(root / 'catalog.json'),
@@ -102,6 +106,10 @@ class _data_adapters_DataAdapterFixtureTest(unittest.TestCase):
             self.assertEqual(report.profile.noise.status, NoiseStatus.NOISY)
             self.assertEqual(report.profile.noise.origin.value, 'native')
             self.assertEqual(report.profile.clean_train_labels, KnowledgeState.UNAVAILABLE)
+            self.assertEqual(dict(report.profile.sample_counts_by_split)['clean_train'], 1)
+            self.assertEqual(len(service.registry.training_pool(DataSpec('clothing1m', root=root), seed=1)), 1)
+            applied = service.apply({'data': {'name': 'cifar10', 'num_classes': 10}}, 'clothing-fixture')
+            self.assertEqual(applied['data']['num_classes'], 14)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for split_name in ('training', 'testing'):

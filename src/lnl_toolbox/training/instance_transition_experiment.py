@@ -469,9 +469,10 @@ def run_instance_transition_experiment(
     union_set = prepared.dynamic_dataset(
         manifest.global_indices, targets_by_index=noisy_map, training=False
     )
-    # The official PDL code uses a non-shuffled loader and indexes W by the
-    # sequential batch position during correction.
-    train_loader = prepared.loader(DataRole.TRAIN, shuffle=False)
+    # PDL looks up transition matrices by sample ID, independently of batch order.
+    train_loader = prepared.loader(
+        DataRole.TRAIN, shuffle=config["instance_transition"].get("name") == "pdl"
+    )
     noisy_validation_loader = prepared.loader(DataRole.NOISY_VALIDATION, shuffle=False)
     union_loader = prepared.loader_for_dataset(union_set, shuffle=False)
     test_loader = prepared.loader(DataRole.TEST, shuffle=False)

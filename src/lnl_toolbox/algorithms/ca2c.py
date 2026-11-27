@@ -98,8 +98,8 @@ class CandidateMemory:
     def from_state_dict(cls, state: Mapping[str, Any]) -> "CandidateMemory":
         if not isinstance(state, Mapping) or "global_indices" not in state or "counts" not in state:
             raise ValueError("CA2C checkpoint is missing candidate memory state")
-        indices = torch.as_tensor(state["global_indices"]).long().clone()
-        counts = torch.as_tensor(state["counts"]).float().clone()
+        indices = torch.as_tensor(state["global_indices"]).detach().cpu().long().clone()
+        counts = torch.as_tensor(state["counts"]).detach().cpu().float().clone()
         if indices.ndim != 1 or counts.ndim != 2 or counts.shape[0] != indices.numel():
             raise ValueError("CA2C candidate memory state has invalid dimensions")
         if counts.shape[1] <= 1 or not bool(torch.isfinite(counts).all()) or bool((counts < 0).any()):

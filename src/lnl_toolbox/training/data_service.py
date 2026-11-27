@@ -775,7 +775,16 @@ def _prepare_experiment_data(
     run_dir.mkdir(parents=True, exist_ok=True)
     train = registry.load(spec, "train", seed=seed)
     automatic_split = (data_config.get("validation_split", {}) or {}).get("source") == "training_pool"
-    if automatic_split:
+    # Clothing1M supplies a separate clean validation set. A zero split size
+    # explicitly keeps that native set instead of repartitioning the pool.
+    if spec.name == "clothing1m" and int(data_config.get("validation_size", 0) or 0) == 0:
+        automatic_split = False
+    # An explicit Clothing1M noisy-validation key list partitions only the
+    # original noisy training source, never the independent clean validation set.
+    noisy_validation_manifest = data_config.get("noisy_validation_manifest") if spec.name == "clothing1m" else None
+    if noisy_validation_manifest:
+        automatic_split = True
+    elif automatic_split:
         train = registry.training_pool(spec, seed=seed, train=train)
     if requirements.class_subset is not None:
         selected = np.flatnonzero(np.isin(train.observed_targets, requirements.class_subset))
@@ -835,7 +844,25 @@ def _prepare_experiment_data(
             f"原始训练池共 {source_train_indices.size} 个样本"
         )
 
-    if native_validation is not None and native_validation.dataset == train.dataset:
+    if noisy_validation_manifest:
+        manifest_path = Path(str(noisy_validation_manifest))
+        if not manifest_path.is_absolute():
+            manifest_path = spec.root / manifest_path
+        keys = [line.strip().replace("\\", "/").removeprefix("./") for line in manifest_path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        if len(keys) != len(set(keys)) or len(keys) != validation_size:
+            raise ValueError("Clothing1M noisy validation manifest count must match data.validation_size and contain no duplicate keys")
+        keyset = set(keys)
+        paths = [Path(str(item)).resolve().relative_to(spec.root.resolve()).as_posix() for item in train.inputs]
+        selected = np.asarray([i for i, key in enumerate(paths) if key in keyset], dtype=np.int64)
+        if selected.size != len(keys):
+            raise ValueError("Clothing1M noisy validation manifest contains samples outside training source")
+        mask = np.isin(source_train_indices, train.global_indices[selected])
+        validation_indices = source_train_indices[mask]
+        full_train_indices = source_train_indices[~mask]
+        if validation_indices.size != validation_size:
+            raise ValueError("Clothing1M noisy validation samples were removed by an earlier subset")
+        validation_split = train
+    elif native_validation is not None and native_validation.dataset == train.dataset:
         full_train_indices = source_train_indices.copy()
         validation_indices = native_validation.global_indices.copy()
         validation_split = native_validation
@@ -1525,7 +1552,32 @@ class DataService:
         return self.catalog.get(name)
 
     def apply(self, config: Mapping[str, Any], name: object) -> dict[str, Any]:
-        return self.catalog.apply(config, name)
+        result = self.catalog.apply(config, name)
+        profile = self.catalog.get(name).profile or {}
+        num_classes = profile.get("num_classes")
+        if num_classes is not None:
+            result["data"]["num_classes"] = int(num_classes)
+        previous = config.get("local_dataset") or {}
+        old_data_name = (config.get("data") or {}).get("name")
+        source_changed = old_data_name and old_data_name != result["data"].get("name")
+        source_changed = source_changed or (
+            previous.get("source_signature")
+            and previous["source_signature"] != result["local_dataset"]["source_signature"]
+        )
+        noise = result.get("noise") or {}
+        pipeline = result.get("pipeline") or {}
+        if (
+            source_changed
+            and (noise.get("type") or noise.get("name")) in {"native", "real_world"}
+            and pipeline.get("pretraining_protocol") == "loss_correction"
+            and (pipeline.get("transition_estimator") or {}).get("name") == "known"
+        ):
+            from lnl_toolbox.quickstart.templates import configure_loss_correction_transition
+
+            noise.pop("transition_matrix", None)
+            pipeline["transition_estimator"] = {"name": "anchor"}
+            configure_loss_correction_transition(result)
+        return result
 
     def validate_cal_external_labels(self, config: Mapping[str, Any]) -> dict[str, Any]:
         """Validate CAL's external clean/noisy label artifact without leaking labels."""
@@ -1697,6 +1749,14 @@ class DataService:
                 validation = None
             if validation is not None and validation.split == "validation" and len(validation):
                 splits["validation"] = validation
+            if adapter == "clothing1m":
+                try:
+                    clean_train = self.registry.load(spec, "clean_train", seed=seed)
+                except UnsupportedDatasetSplitError:
+                    pass
+                else:
+                    if len(clean_train):
+                        splits["clean_train"] = clean_train
             adapter_impl = self.registry.get(spec.name)
             semantic_hints = getattr(adapter_impl, "semantic_hints", None)
             if callable(semantic_hints):

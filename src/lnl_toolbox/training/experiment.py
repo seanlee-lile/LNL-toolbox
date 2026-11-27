@@ -94,6 +94,9 @@ def build_model(config: Mapping[str, Any], num_classes: int) -> nn.Module:
         if channels != 3:
             model.conv1 = nn.Conv2d(channels, 64, 7, stride=2, padding=3, bias=False)
             nn.init.kaiming_normal_(model.conv1.weight, mode="fan_out", nonlinearity="relu")
+        from lnl_toolbox.models.feature_output import expose_torchvision_resnet_features
+
+        expose_torchvision_resnet_features(model)
         return model
     if weights_name != "none":
         raise ValueError(f"{name} with variant {variant} does not support pretrained weights")
@@ -717,7 +720,22 @@ def run_supervised_experiment(
         config["parameter_update"]
     )
     optimizer = build_optimizer(model, config["optimizer"])
+    objective_config = (config.get("pipeline") or {}).get("objective_consumer") or {}
+    dss_sample_ids = None
+    if objective_config.get("name") == "dss":
+        source_ids = prepared.train_split.global_indices
+        train_ids = prepared.train_indices
+        source_capacity = len(source_ids)
+        # Preserve the original checkpoint layout for full contiguous sources.
+        if np.array_equal(np.sort(source_ids), np.arange(source_capacity)):
+            objective_config["num_samples"] = source_capacity
+        else:
+            objective_config["num_samples"] = len(train_ids)
+            dss_sample_ids = torch.as_tensor(train_ids, dtype=torch.long)
+        objective_config["num_classes"] = num_classes
     pipeline = build_builtin_pipeline(config.get("pipeline"))
+    if dss_sample_ids is not None:
+        pipeline.objective_consumer.bind_sample_ids(dss_sample_ids)
     from lnl_toolbox.noise.estimators import AnchorTransitionEstimator
 
     estimated_correction = (

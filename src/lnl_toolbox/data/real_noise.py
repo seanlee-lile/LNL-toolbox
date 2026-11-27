@@ -86,6 +86,7 @@ def _resolve_images(root: Path, keys: tuple[str, ...]) -> tuple[Path, ...]:
 class Clothing1MAdapter:
     name = "clothing1m"
     aliases = ("clothing_1m",)
+    independent_validation = True
     semantic_hints = DatasetSemanticHints(
         clean_train_labels=KnowledgeState.UNAVAILABLE,
         clean_validation_labels=KnowledgeState.AVAILABLE,
@@ -100,11 +101,13 @@ class Clothing1MAdapter:
         "train": "noisy_train_key_list.txt",
         "validation": "clean_val_key_list.txt",
         "test": "clean_test_key_list.txt",
+        "clean_train": "clean_train_key_list.txt",
     }
     _label_defaults = {
         "train": "noisy_label_kv.txt",
         "validation": "clean_label_kv.txt",
         "test": "clean_label_kv.txt",
+        "clean_train": "clean_label_kv.txt",
     }
 
     def _manifest(self, spec: DataSpec, split: str) -> Path:
@@ -124,6 +127,9 @@ class Clothing1MAdapter:
         if spec.root is None or not spec.root.is_dir():
             raise FileNotFoundError(f"dataset root does not exist: {spec.root}")
         for split in self._defaults:
+            if split == "clean_train":
+                # Optional, so existing noisy-only installations still work.
+                continue
             if split == "validation" and bool(spec.options.get("validation_optional", False)):
                 continue
             for kind, path in (("key list", self._manifest(spec, split)), ("label mapping", self._labels(spec, split))):
@@ -133,8 +139,11 @@ class Clothing1MAdapter:
     def load(self, spec: DataSpec, split: str, *, seed: int) -> RawDatasetSplit:
         del seed
         if split not in self._defaults:
-            raise ValueError("Clothing1M split must be train, validation, or test")
-        keys = _read_key_list(self._manifest(spec, split))
+            raise UnsupportedDatasetSplitError(f"Clothing1M does not provide split {split!r}")
+        manifest = self._manifest(spec, split)
+        if split == "clean_train" and not manifest.is_file() and not spec.options.get("clean_train_manifest"):
+            raise UnsupportedDatasetSplitError("Clothing1M clean training key list is not installed")
+        keys = _read_key_list(manifest)
         mapping = _read_label_kv(self._labels(spec, split), num_classes=14)
         missing = [key for key in keys if key not in mapping]
         if missing:
@@ -142,10 +151,20 @@ class Clothing1MAdapter:
         images = _resolve_images(spec.root, keys)
         labels = np.asarray([mapping[key] for key in keys], dtype=np.int64)
         clean = None if split == "train" else labels
+        # Preserve training indices; assign other native splits disjoint ranges.
+        offset = 0
+        if split != "train":
+            offset = len(_read_key_list(self._manifest(spec, "train")))
+        if split in {"test", "clean_train"}:
+            validation_manifest = self._manifest(spec, "validation")
+            if validation_manifest.is_file() or not spec.options.get("validation_optional"):
+                offset += len(_read_key_list(validation_manifest))
+        if split == "clean_train":
+            offset += len(_read_key_list(self._manifest(spec, "test")))
         return RawDatasetSplit(
             images,
             labels,
-            np.arange(labels.size, dtype=np.int64),
+            np.arange(offset, offset + labels.size, dtype=np.int64),
             self.name,
             split,
             14,

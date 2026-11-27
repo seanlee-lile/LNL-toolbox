@@ -3,6 +3,7 @@ from __future__ import annotations
 """Opt-in model output contract for consumers of learned features."""
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import torch
@@ -40,6 +41,22 @@ class FeatureOutput:
             raise ValueError("FeatureOutput tensors must be finite")
 
 
+def _torchvision_resnet_features(model: nn.Module, inputs: Tensor) -> FeatureOutput:
+    values = model.relu(model.bn1(model.conv1(inputs)))
+    values = model.maxpool(values)
+    values = model.layer1(values)
+    values = model.layer2(values)
+    values = model.layer3(values)
+    values = model.layer4(values)
+    features = torch.flatten(model.avgpool(values), 1)
+    return FeatureOutput(model.fc(features), features)
+
+
+def expose_torchvision_resnet_features(model: nn.Module) -> None:
+    """Expose pooled features without wrapping the model or renaming parameters."""
+    model.forward_with_features = partial(_torchvision_resnet_features, model)
+
+
 def forward_with_features(
     model: nn.Module,
     inputs: Tensor,
@@ -49,14 +66,7 @@ def forward_with_features(
     method = getattr(model, "forward_with_features", None)
     if not callable(method):
         if type(model).__module__ == "torchvision.models.resnet" and isinstance(getattr(model, "fc", None), nn.Linear):
-            values = model.relu(model.bn1(model.conv1(inputs)))
-            values = model.maxpool(values)
-            values = model.layer1(values)
-            values = model.layer2(values)
-            values = model.layer3(values)
-            values = model.layer4(values)
-            features = torch.flatten(model.avgpool(values), 1)
-            return FeatureOutput(model.fc(features), features)
+            return _torchvision_resnet_features(model, inputs)
         raise TypeError(
             f"model {type(model).__name__} does not expose "
             "forward_with_features()"

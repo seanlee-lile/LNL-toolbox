@@ -102,7 +102,9 @@ class DatasetRegistry:
 def training_pool_size(adapter: str, counts: dict) -> int:
     """Count the unpartitioned non-test pool using accepted dataset facts."""
     train = int(counts.get("train", 0) or 0)
-    return train if adapter.startswith("synthetic_") else train + int(counts.get("validation", 0) or 0)
+    if adapter == "clothing1m" or adapter.startswith("synthetic_"):
+        return train
+    return train + int(counts.get("validation", 0) or 0)
 
 
 __all__ = ["DatasetRegistry", "normalize_dataset_name", "training_pool_size"]

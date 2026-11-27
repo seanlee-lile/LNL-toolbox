@@ -324,3 +324,22 @@ class _dss_DSSObjectiveTest(unittest.TestCase):
         torch.testing.assert_close(restored.objective_consumer.selector.history.values, objective.selector.history.values)
         with self.assertRaisesRegex(ValueError, 'missing'):
             restored.load_component_states({})
+
+    def test_sparse_sample_ids_are_stable_on_restore(self) -> None:
+        objective = DSSObjective(2, 2, 2, warmup_epochs=1, mda=False, ccs=False)
+        objective.bind_sample_ids(torch.tensor([90, 12]))
+        objective.on_cycle_start(RunState(cycle=0))
+        objective.compute(
+            logits=torch.tensor([[0.0, 2.0], [2.0, 0.0]]),
+            noisy_targets=torch.tensor([1, 0]),
+            sample_indices=torch.tensor([90, 12]),
+            base_loss=None,
+            metadata={'epoch': 0},
+        )
+        self.assertEqual(objective.selector.labels.tolist(), [0, 1])
+        saved = objective.state_dict()
+        objective.bind_sample_ids(torch.tensor([12, 90]))
+        objective.load_state_dict(saved)
+        objective.bind_sample_ids(torch.tensor([12, 100]))
+        with self.assertRaisesRegex(ValueError, 'sample ID mapping'):
+            objective.load_state_dict(saved)
