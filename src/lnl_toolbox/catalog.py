@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import pickle
 import re
-from typing import Any
+from typing import Any, Literal
 
 from lnl_toolbox.cli import repository_root
 from lnl_toolbox.core.config_schema import normalize_experiment_config
@@ -264,10 +264,14 @@ def _installed_recipe_path(relative: str, *, require_unique: bool = False) -> Pa
 
 def _recipe_path(
     entry: _RecipeManifestEntry, project: Path, installed_lookup: _InstalledRecipeLookup,
+    *, origin: Literal["auto", "source", "installed"] = "auto",
 ) -> Path:
-    source = (project / entry.path).resolve()
-    if source.is_file():
-        return source
+    if origin != "installed":
+        source = (project / entry.path).resolve()
+        if source.is_file():
+            return source
+        if origin == "source":
+            raise FileNotFoundError(f"source built-in recipe is missing: {source}")
     installed = installed_lookup.resolve(entry.path, recipe_id=entry.id)
     if not installed.is_file():
         raise FileNotFoundError(f"packaged built-in recipe is missing: {entry.path}")
@@ -297,7 +301,9 @@ def _default_configuration_fidelity(profile: str) -> str:
     return "engineering"
 
 
-def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
+def _builtin_recipe_index(
+    root: Path | None, *, origin: Literal["auto", "source", "installed"] = "auto",
+) -> dict[str, RecipeSpec]:
     """Validate registered resources before deriving any discovery projection."""
     import yaml
 
@@ -312,7 +318,7 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
         relative = entry.path
         recipe_id = entry.id
         try:
-            path = _recipe_path(entry, project, installed_lookup)
+            path = _recipe_path(entry, project, installed_lookup, origin=origin)
             stat = path.stat()
         except FileNotFoundError as exc:
             raise FileNotFoundError(
@@ -387,6 +393,14 @@ def _builtin_recipe_index(root: Path | None) -> dict[str, RecipeSpec]:
             description=public["description"] if public is not None else "",
         )
     return recipes
+
+
+def check_builtin_recipe_resources() -> tuple[str, int]:
+    """Check registered resources at the origin of the running code, not the cwd."""
+    root = repository_root().resolve()
+    source_module = root / "src" / "lnl_toolbox" / "catalog.py"
+    origin = "source" if source_module == Path(__file__).resolve() else "installed"
+    return origin, len(_builtin_recipe_index(root, origin=origin))
 
 
 def discover_recipes(

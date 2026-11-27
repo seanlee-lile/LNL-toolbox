@@ -37,6 +37,39 @@ kind: experiment  # 或 fragment / mentor_artifact
 
 **DLD（专用生命周期与前置条件）。** 参考 `methods/dld/dld_cifar10_reproduction.yaml`，保留 `dld` runner 及其特征提取、扩散和推理阶段。完成相同的路径登记及 Paper 关联；如果所用正式配置依赖外部特征来源，还需登记 `conditional`。只有正式参数基准或可编辑字段变化时，才同步 Web 绑定。
 
+## 配置参考
+
+下列字段都放在完整的 `kind: experiment` 配置中；从对应完整 recipe 开始，再按需要修改。历史示例值不等于论文推荐值。
+
+- **基础 loss 与噪声。** 在 `loss` 下用 `name: ce` 选择 CE；在 `noise` 下用 `name: symmetric`、`rate` 和 `seed` 分别指定噪声类型、翻转率和随机种子。见 [CE + symmetric 完整示例](methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml)。
+- **APL / NCE。** `loss.name: apl` 组合正权重 `alpha` / `beta` 与 `active.name: nce` / `passive.name: rce`。例如自定义 `loss.passive.log_zero: -4.0` 并不是[现行 APL 正式值](methods/apl/apl_cifar10_noise02_reproduction.yaml) `log(1e-4)`。NCE 也可作为注册的独立 loss：使用 `loss.name: nce`，按需设置 `loss.eps`，字段见 [NCE 片段](algorithm/nce.yaml)。
+- **CDR。** `cdr.compatibility_mode` 区分 [`paper`](methods/cdr/cifar10_symmetric_cdr_smoke.yaml) 和 [`official_code`](methods/cdr/cifar10_symmetric_cdr_reproduction.yaml)；结合 recipe 检查 `cdr.noise_rate`、`cdr.l1_decay` 和 `cdr.critical_scope`，不能把 smoke 参数当作正式协议。
+- **CNLCU。** 把 [CNLCU-H 片段](algorithm/cnlcu_hard.yaml)的有效参数用在完整配置的 `cnlcu` 节中；窗口、最少观测数、fixed loss bound 和 corrected LOF 共同定义 hard 路径。相对地，[CNLCU-S](methods/cnlcu/cifar10_cnlcu_soft_smoke.yaml)使用固定长度 float32 loss history、soft uncertainty、线性 remember 日程以及 stable sample index 的并列裁决。
+- **Co-teaching / JoCoR。** 从 [Co-teaching 完整配置](methods/coteaching/cifar10_coteaching_smoke.yaml)检查实际噪声率与 remember schedule 的配对；改噪声设置时需重新核对 样本选择比例，而不是把 `noise.rate` 当成 keep rate。 [JoCoR](methods/jocor/jocor_cifar10_symmetric05_smoke.yaml) 的 `algorithm.name: jocor` / `algorithm.lambda` 与 `selector.name: small_loss` / `selector.keep_rate` 配套；floor 是选择计数规则。
+- **DSS / GCE。** [DSS 完整配置](methods/dss/dss_cifar10_symmetric05_reproduction.yaml)包含 warmup、MDA 和 CCS/masking 阶段，单个 loss 片段不能表达该流程。[GCE 完整配置](methods/gce/gce_cifar10_noise02_reproduction.yaml)使用 `loss.name: gce` 和 `loss.q` 控制目标形状；标准 GCE 不隐含截断阈值。
+- **Loss Correction。** 已知 T 的 forward correction 消费预先指定的转移矩阵；未知 T 的 [Anchor 两阶段配置](methods/loss-correction/loss_correction_cifar10_asymmetric04.yaml)先以正的 warmup 预算训练估计模型，再用 `pipeline.transition_estimator` 估计 T 并进入校正训练。仅把 estimator 名称写进一个片段不构成完整实验。
+- **MentorNet。** `pipeline.weight_provider` 配置 Student 消费的 MentorArtifact 及运行日程，如 percentile、decay、burn-in 和 dropout。旧自定义示例的 decay `0.5` 不等价于[正式 Student 配置](methods/mentornet/mentornet_dd_cifar100_symmetric04_reproduction.yaml)的 `0.95`；artifact 必须满足该 Student 的身份要求。
+- **IDN / PDL。** 通用 IDN 的入口是 Python `lnl_toolbox.noise.generators.generate_instance_dependent(labels, class_scores, rate, seed, dataset=...)`，其中分数形状为 `[N, C]`；旧 `score_weighted_idn` YAML 片段不是现行训练 schema 的噪声类型。PDL 的 Algorithm 2 噪声生成产生 noisy-label manifest，和 [PDL 训练配置](methods/pdl/pdl_cifar10_reproduction.yaml)的实例转移估计/校正不是同一步。
+
+CNLCU-H 和 NCE 两份保留片段不是完整实验，也不是完整算法配置库。它们不参与自动组合，不会改变正式 recipe；引用其中参数时须放入上面说明的配置上下文。
+
+## 未登记的科研支持配置
+
+以下完整配置可按新路径使用 `--config`，不属于 recipe discovery 或发布包，仍须准备原配置所需数据和资源：
+
+| 配置 | 验证边界 |
+| --- | --- |
+| [CWD 1 epoch](methods/cwd/support/cwd_cifar10_1epoch.yaml) | CIFAR-10 airplane/automobile，五折中的 fold 0，非 `binary_scalar`；一次运行不覆盖全部五折。 |
+| [FINE 1 epoch](methods/fine/support/fine_cifar100n_1epoch.yaml) | CIFAR-100 合成对称噪声；只走 warmup，不消费真实 CIFAR-100N 标签，也不验证 robust 阶段。 |
+| [L2RW 1 epoch](methods/l2rw/support/l2rw_cifar10_1epoch.yaml) | 需要配置指定的 audited trusted manifest；用来检查 bilevel 更新，不等同于完整实验。 |
+| [MC-LDCE 1 epoch](methods/mc-ldce/support/mc_ldce_cifar10_1epoch.yaml) | 包含真实 T 估计到主训练的交接；不以测试矩阵代替该阶段。 |
+| [MentorNet CIFAR-10 Student](methods/mentornet/support/mentornet_cifar10_symmetric04_1epoch.yaml) | 使用配置所指的冻结 MentorArtifact；不要假定与正式 CIFAR-100 Student 的 artifact 可互换。 |
+| [VolMin smoke](methods/volminnet/legacy/volmin_cifar10_smoke.yaml) / [reproduction](methods/volminnet/legacy/volmin_cifar10_reproduction.yaml) | 独立 `volmin` runner，联合学习模型和 T，以 clean validation 选择 checkpoint，保留原 `last.pt` / resume 合同。现行 `volminnet` 使用 noisy validation 并导出 best/last portable T；旧 VolMin 不是其前置步骤。 |
+
+`lnl doctor` 检查正在运行的源码或安装包中的 **68 份已登记配置资源**，包括 conditional 定义；这不检查方法是否具备外部数据或 artifact。三份只打包、不登记的 YAML 由打包验证另行核验。工作目录无需包含旧 `configs/experiment/`；用户仍可在该目录保存自己的配置。用显式 `--config` 检查指定配置，加 `--check-data` 才请求该配置的数据检查。
+
+历史配置见[归档索引](../archive/configs/README.md)。支持配置迁移后，按旧完整路径运行的命令需更新；自定义 YAML 位置约定不变。
+
 ## 用户可见配方
 
 活动 YAML 是内部可复现资产，不等于都需要出现在用户菜单中。

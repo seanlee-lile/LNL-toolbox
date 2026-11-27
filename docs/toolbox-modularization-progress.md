@@ -1,5 +1,19 @@
 # Toolbox modularization progress
 
+## Non-published configuration cleanup — scientific follow-ups
+
+Base: `code@c8b82a8f9bc9dc1fd4236fc4f3f695b2b6b4740a`. Moving or archiving local reference YAML does not expand paper or recipe coverage. See the [configuration guide](../configs/README.md#未登记的科研支持配置) and [archive index](../archive/configs/README.md).
+
+| Finding | Classification / deferred decision |
+| --- | --- |
+| Binary Risk Natarajan 1-epoch | Registered config exists; it is not a Paper association. |
+| Loss Correction known-T | Existing correction path, but no dedicated end-to-end quick recipe; do not count component tests or the Anchor recipe as that entry. |
+| CNLCU-H | Implemented, with smoke coverage; no separate formal config. |
+| LEND `author_release` | Implemented variant; no separate formal config. |
+| CDR `paper` | Implemented mode with smoke coverage; no separate formal config. |
+| PCSE default | The Paper variant label and actual default protocol may disagree; this is a metadata question, not evidence of a missing implementation. |
+| Independent VolMin | Runnable historical implementation; whether to register it as a distinct historical variant is open. It is not a VolMinNet prerequisite. |
+
 ## Config path decoupling — catalog-driven wizard membership
 
 Base: `code@993e18a78e82d48acea12b92801ee580c2189bfb`.

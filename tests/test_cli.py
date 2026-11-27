@@ -1,4 +1,7 @@
 from __future__ import annotations
+from contextlib import redirect_stdout
+from importlib.metadata import PackagePath
+from io import StringIO
 import json
 from pathlib import Path
 import tempfile
@@ -11,7 +14,73 @@ import lnl_toolbox.cli as cli_shared
 from lnl_toolbox.cli import clean_train as clean_cli
 from lnl_toolbox.cli import inspect_data as inspect_cli
 from lnl_toolbox.cli import make_noise as noise_cli
+from lnl_toolbox.cli import main as main_cli
 from lnl_toolbox.cli import train as train_cli
+
+
+class DoctorResourceOriginTest(unittest.TestCase):
+    def test_doctor_uses_only_the_running_codes_resource_origin(self):
+        root = catalog.repository_root()
+        entries, conditional, _ = catalog._recipe_manifest()
+        entry = next(item for item in entries if item.path in conditional)
+        contents = (root / entry.path).read_bytes()
+        record = PackagePath(f"share/lnl-toolbox/{entry.path}")
+        for source in (True, False):
+            for present in (True, False):
+                with self.subTest(source=source, present=present), tempfile.TemporaryDirectory() as directory:
+                    temp = Path(directory).resolve()
+                    checkout = temp / "checkout"
+                    work = temp / "user"
+                    work.mkdir()
+                    module = (checkout / "src" if source else temp / "site-packages") / "lnl_toolbox/catalog.py"
+                    source_path = checkout / entry.path
+                    installed_path = temp / record
+                    expected = source_path if source else installed_path
+                    shadow = installed_path if source else work / entry.path
+                    paths = (expected, shadow) if present else (shadow,)
+                    for path in paths:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(contents)
+                    distribution = Mock(files=[record], locate_file=lambda path: temp / path)
+                    output = StringIO()
+                    with patch.object(catalog, "__file__", str(module)), \
+                         patch.object(catalog, "repository_root", return_value=checkout), \
+                         patch.object(catalog, "_recipe_manifest", return_value=((entry,), conditional & {entry.path}, {})), \
+                         patch.object(catalog, "_installed_distribution", return_value=distribution) as lookup, \
+                         patch.object(Path, "cwd", return_value=work), \
+                         patch.object(main_cli.metadata, "version", return_value="fixture"), \
+                         redirect_stdout(output):
+                        self.assertEqual(main_cli.main(["doctor"]), 0 if present else 1)
+                    if source:
+                        lookup.assert_not_called()
+                    else:
+                        lookup.assert_called_once_with(entry.path)
+                    self.assertFalse((work / "configs/experiment").exists())
+                    self.assertFalse((work / "pyproject.toml").exists())
+                    self.assertIn(str(work), output.getvalue())
+                    self.assertIn(
+                        f"1 registered recipes ({'source' if source else 'installed'})" if present else entry.id,
+                        output.getvalue(),
+                    )
+
+    def test_doctor_explicit_config_still_passes_check_data_to_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            path = root / "configs/experiment/custom.yaml"
+            path.parent.mkdir(parents=True)
+            path.write_text("data: {name: cifar10, root: local-data}\n", encoding="utf-8")
+            for check_data in (True, False):
+                with self.subTest(check_data=check_data), \
+                     patch.object(main_cli, "check_builtin_recipe_resources", return_value=("installed", 68)), \
+                     patch.object(main_cli.metadata, "version", return_value="fixture"), \
+                     patch.object(main_cli, "_validate_with_registry", return_value=Mock(name="runner")) as validate, \
+                     redirect_stdout(StringIO()):
+                    args = ["doctor", "--project-root", str(root), "--config", str(path)]
+                    if check_data:
+                        args.append("--check-data")
+                    self.assertEqual(main_cli.main(args), 0)
+                    self.assertEqual(Path(validate.call_args.args[0]["data"]["root"]), root / "local-data")
+                    self.assertEqual(validate.call_args.kwargs, {"check_data": check_data})
 
 def _cli_scripted_session(values: list[str]) -> tuple[PromptSession, list[str]]:
     answers = iter(values)

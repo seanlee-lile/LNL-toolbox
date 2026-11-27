@@ -85,11 +85,8 @@ git push
 | `configs/README.md` | 解释配置层与核心框架的关系。 | 配置机制变化时更新。 |
 | `configs/methods/supervised-baselines/cifar10_smoke.yaml` | 两轮、小样本快速实验。 | 用于确认程序能跑通，不用于报告正式精度。 |
 | `configs/methods/clean/cifar10_clean.yaml` | 30 轮干净 CIFAR-10 基准实验。 | 正式运行前确认数据路径、设备和训练轮数。 |
-| `configs/algorithm/ce.yaml` | CE 示例算法配置。 | `name` 和 loss 名称必须与插件注册一致。 |
-| `configs/algorithm/gce.yaml` | GCE 示例配置。 | `q` 控制 CE 与 MAE 之间的折中。 |
-| `configs/algorithm/coteaching.yaml` | Co-teaching 参数片段。 | 双模型方法由 `method: coteaching` 专属 runner 消费；不是通用 Selector 配置。 |
-| `configs/noise/symmetric.yaml` | 对称噪声参数示例。 | 记录噪声率和 seed。 |
-| `configs/noise/instance_dependent.yaml` | 实例依赖噪声参数示例。 | 当前是基于 class score 的示例生成器，不等同于某篇论文完整算法。 |
+| [配置参考](../configs/README.md#配置参考) | CE/GCE、Co-teaching、对称噪声和 IDN 等现行字段与入口。 | 从对应完整配置开始；IDN 的 class-score 生成器是 Python API。 |
+| [未登记的科研支持配置](../configs/README.md#未登记的科研支持配置) | 方法专用短配置、独立 VolMin 对照。 | 直接按路径使用，不进入正式菜单或发布包。 |
 
 ## 8. Python 包入口
 

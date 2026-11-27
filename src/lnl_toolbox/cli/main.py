@@ -14,6 +14,7 @@ from typing import Any
 from lnl_toolbox.catalog import (
     PaperSpec,
     RecipeSpec,
+    check_builtin_recipe_resources,
     discover_recipes,
     find_project_root,
     load_papers,
@@ -496,7 +497,7 @@ def _doctor(args: argparse.Namespace) -> int:
         failures += 0 if ok else 1
 
     report(sys.version_info >= (3, 10), "Python", platform.python_version())
-    report((root / "pyproject.toml").is_file(), "项目根目录", str(root))
+    report(root.is_dir(), "工作目录", str(root))
     for package in ("numpy", "yaml", "torch", "torchvision"):
         distribution = "pyyaml" if package == "yaml" else package
         try:
@@ -512,7 +513,11 @@ def _doctor(args: argparse.Namespace) -> int:
         report(True, "CUDA", detail)
     except ImportError:
         pass
-    report((root / "configs" / "experiment").is_dir(), "实验配置", str(root / "configs" / "experiment"))
+    try:
+        origin, count = check_builtin_recipe_resources()
+        report(True, "内置配方资源", f"{count} registered recipes ({origin})")
+    except (ImportError, OSError, TypeError, ValueError, RuntimeError) as exc:
+        report(False, "内置配方资源", str(exc))
     output = root / "artifacts"
     report(output.exists() or output.parent.is_dir(), "输出位置", str(output))
     if config_path:

@@ -87,7 +87,7 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `algorithms/instance_transition.py` | 不绑定论文名称的实例转移校正分类 Algorithm，支持 Forward 与 importance correction。 |
 | `training/instance_transition_experiment.py` | 独立多阶段 runner：noisy warm-up、posterior/feature snapshot、实例转移估计、校正训练、checkpoint/resume。 |
 | `cli/instance_transition_train.py` | 通用实例转移实验命令行入口。 |
-| `configs/noise/pdl.yaml` | PDL Algorithm 2 噪声 manifest 参数片段。 |
+| [配置参考：IDN / PDL](../configs/README.md#配置参考) | 区分 PDL Algorithm 2 噪声生成与训练中的实例转移校正。 |
 | `configs/methods/pdl/pdl_cifar10_smoke.yaml` | PDL 小样本多阶段 smoke。 |
 | `configs/methods/pdl/pdl_cifar10_reproduction.yaml` | 论文 CIFAR-10 单次正式配置；尚未运行。 |
 | `tests/test_pdl.py` | generator、anchor、Eq. (1)/(2)/(4)、artifact、Forward/Reweight、checkpoint identity 测试。 |
@@ -174,19 +174,10 @@ data 安装，避免用户本地 YAML 污染 catalog。
 |---|---|
 | `configs/README.md` | 说明 schema v1、experiment/fragment/mentor_artifact 类型、本地数据登记及旧别名淘汰规则。 |
 | `archive/configs-legacy-2026-08-21/` | 迁移前全部 92 个 YAML 的原样恢复副本；`manifest.json` 保存路径、长度和 SHA-256。 |
-| `tests/test_config_schema.py` | 覆盖旧别名规范化、未知字段失败、92 个活动 YAML 及 64 个内置 recipe 门禁；公开展示层另由 recipe catalog 测试覆盖。 |
-| `configs/algorithm/ce.yaml` | CE 示例参数。 |
-| `configs/algorithm/gce.yaml` | 标准 GCE 的 `q` 参数；不包含隐式截断阈值。 |
-| `configs/algorithm/nce.yaml` | NCE 的数值稳定参数。 |
-| `configs/algorithm/apl.yaml` | 严格正权重及 NCE + RCE 嵌套配置。 |
-| `configs/algorithm/coteaching.yaml` | Co-teaching 示例参数。 |
-| `configs/algorithm/cnlcu_soft.yaml` | CNLCU-S 的线性 remember schedule、fixed-window float32 history、soft uncertainty 和 stable-index selection 参数。 |
-| `configs/algorithm/cnlcu_hard.yaml` | CNLCU-H paper formulas、fixed loss bound 和 corrected-LOF fidelity identity。 |
-| `configs/algorithm/cdr.yaml` | 显式声明 paper-mode CDR 的噪声率、L1 系数、参数范围和 compatibility mode。 |
-| `configs/algorithm/dss.yaml` | DSS Objective 的论文参数片段：150 epochs、30 warm-up、MDA 0.99 与 CCS α=0.10。 |
-| `configs/algorithm/jocor.yaml` | JoCoR 联合目标和官方 floor small-loss 日程片段。 |
-| `configs/noise/symmetric.yaml` | symmetric noise 示例参数。 |
-| `configs/noise/instance_dependent.yaml` | 示例 IDN 参数。 |
+| `tests/test_config_schema.py`、`tests/test_recipe_identity.py` | 检查配置规范化和内置 recipe 身份；发布资源与可发现配方分别核验。 |
+| [配置参考](../configs/README.md#配置参考) | 当前算法、loss、噪声和 provider 字段；仍保留 CNLCU-H、NCE 两份非自动组合片段。 |
+| [未登记的科研支持配置](../configs/README.md#未登记的科研支持配置) | 按新路径可运行的短配置和独立 VolMin 对照。 |
+| [历史配置归档](../archive/configs/README.md) | 保留旧协议与 provenance；不是现行参考配置。 |
 | `configs/methods/supervised-baselines/cifar10_symmetric_ce_smoke.yaml` | symmetric 0.4 + CE 的统一 noisy runner smoke 配置。 |
 | `configs/methods/supervised-baselines/cifar10_symmetric_small_loss_smoke.yaml` | symmetric 0.4 + CE + 固定 0.5 keep-rate SmallLossSelector 的单模型 smoke 配置。 |
 | `configs/methods/supervised-baselines/cifar10_symmetric_small_loss_linear_smoke.yaml` | symmetric 0.4 + CE + 从 1.0 线性变化到 0.5 的 SmallLossSelector smoke 配置。 |
@@ -285,11 +276,11 @@ data 安装，避免用户本地 YAML 污染 catalog。
 | `configs/methods/cwd/cwd_cifar10_{smoke,reproduction}.yaml` | CWD smoke 与单次 200-epoch、五折中 fold 0 的论文配置；reproduction 使用 Moore--Penrose `pinv` 和 dynamic centroid。 |
 | `configs/methods/fine/fine_cifar100n_{smoke,reproduction}.yaml` | FINE smoke 与单次 300-epoch、200-epoch warm-up 配置。 |
 | `configs/methods/binary-risk/binary_risk_natarajan_1epoch.yaml` | Natarajan 二分类无偏风险的一组 synthetic 论文算法 1-epoch 验证配置。 |
-| `configs/experiment/cwd_cifar10_1epoch.yaml` | CWD 五折 fold 0、CIFAR airplane/automobile、1-epoch 完整生命周期配置。 |
-| `configs/experiment/fine_cifar100n_1epoch.yaml` | FINE CIFAR-100N、1-epoch warm-up 生命周期配置；`warmup_epochs == trainer.epochs` 表示只验证首个论文阶段。 |
-| `configs/experiment/mentornet_cifar10_symmetric04_1epoch.yaml` | MentorNet CIFAR-10 symmetric-40、ResNet-101、冻结 MentorArtifact 的 1-epoch 配置。 |
-| `configs/experiment/mc_ldce_cifar10_1epoch.yaml` | MC-LDCE（仓库中 MC-PCDE 的对应命名）1-epoch 表示/转移估计与全局 objective 配置。 |
-| `configs/experiment/l2rw_cifar10_1epoch.yaml` | L2RW 1-epoch、1000-sample audited trusted manifest 与 bilevel 更新配置。 |
+| `configs/methods/cwd/support/cwd_cifar10_1epoch.yaml` | CWD 五折划分中的 fold 0，CIFAR-10 airplane/automobile 短程入口，不是一键完整五折。 |
+| `configs/methods/fine/support/fine_cifar100n_1epoch.yaml` | CIFAR-100 合成对称噪声；只验证 warmup，不使用真实 CIFAR-100N 标签。 |
+| `configs/methods/mentornet/support/mentornet_cifar10_symmetric04_1epoch.yaml` | MentorNet CIFAR-10 symmetric-40、ResNet-101、冻结 MentorArtifact 的 1-epoch 配置；不能假定与 CIFAR-100 Student artifact 互换。 |
+| `configs/methods/mc-ldce/support/mc_ldce_cifar10_1epoch.yaml` | MC-LDCE 1-epoch 表示/真实转移估计与主训练交接。 |
+| `configs/methods/l2rw/support/l2rw_cifar10_1epoch.yaml` | L2RW 1-epoch、1000-sample audited trusted manifest 与 bilevel 更新配置。 |
 | `training/experiment.py` | 仅接入参数记录、ResNet 深度构造和通用 regularizer，不含论文名称分支。 |
 | `training/binary_experiment.py` | 保持 CSV/NPZ 兼容，并接入现有 synthetic binary generator、class-dependent noise manifest 与 Natarajan risk。 |
 | `training/workflows.py` | 独立 workflow 的延迟注册与通用调度；主实验入口不再按论文名称分支。 |

@@ -288,7 +288,7 @@ from lnl_toolbox.training.experiment import run_experiment
 class _volmin_training_VolMinTrainingTest(unittest.TestCase):
 
     def test_smoke_and_resume(self) -> None:
-        config = yaml.safe_load(Path('configs/experiment/volmin_cifar10_smoke.yaml').read_text())
+        config = yaml.safe_load(Path('configs/methods/volminnet/legacy/volmin_cifar10_smoke.yaml').read_text())
         config['trainer']['epochs'] = 2
         with tempfile.TemporaryDirectory() as directory:
             run = run_experiment(config, Path(directory) / 'run')

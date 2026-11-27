@@ -1,0 +1,13 @@
+# Archived configuration evidence
+
+These unregistered, unpublished YAML files retain their original basenames and content. The commits below establish configuration provenance, not that a particular historical run used the files or completed successfully. The earlier [August 2026 archive](../configs-legacy-2026-08-21/README.md) is a separate, unchanged snapshot.
+
+| Original path | Archived copy | Git evidence and protocol | Current reference |
+| --- | --- | --- | --- |
+| `configs/experiment/dld_cifar10_smoke.yaml` | [DLD snapshot](dld/dld_cifar10_smoke.yaml) | `3a588c6` introduced the old synthetic diffusion config; `72920a6` later updated it. The old flat schema and cosine-distance diffusion with self excluded are not equivalent to current DLD. This is not a current smoke contract. | [Current DLD smoke](../../configs/methods/dld/cifar10_dld_smoke.yaml) |
+| `configs/experiment/binary-risk-natarajan-reproduction-custom.yaml` | [Web snapshot](web-snapshots/binary-risk-natarajan-reproduction-custom.yaml) | `d7edebf`. Despite its filename, this is a Loss Correction configuration snapshot, not a Natarajan-risk experiment. Do not substitute it for either current formal recipe. | [Loss Correction](../../configs/methods/loss-correction/loss_correction_cifar10_asymmetric04.yaml), [Binary Risk](../../configs/methods/binary-risk/binary_risk_natarajan_reproduction.yaml) |
+| `configs/experiment/gce-cifar10-noise02-reproduction-custom.yaml` | [GCE Web snapshot](web-snapshots/gce-cifar10-noise02-reproduction-custom.yaml) | `3edea18`. GCE keeps a 120-epoch budget; the snapshot is not an intermediate-budget run, and a blank sample cap does not define a reduced dataset. | [Current GCE reproduction config](../../configs/methods/gce/gce_cifar10_noise02_reproduction.yaml) |
+| `configs/algorithm/upm.yaml` | [UPM fragment](fragments/algorithm/upm.yaml) | Historical top-level `eta_*` reference, not a complete experiment or current layout. | [Current UPM config](../../configs/methods/upm/upm_cifar10_reproduction.yaml) |
+| `configs/noise/instance_dependent.yaml` | [IDN fragment](fragments/noise/instance_dependent.yaml) | Historical score-weighted generator description, not a supported current YAML noise type. | [Python API reference](../../configs/README.md#配置参考) |
+
+Both Web snapshots contain blank-string values for sample limits; when the current loader consumes a blank limit as an integer, it can fail at `int('')`. The snapshots were not repaired, and the present limitation does not establish whether any older run succeeded. Historical paths in development and research records are retained as provenance.
