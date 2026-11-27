@@ -3207,6 +3207,21 @@ def _sweep_plan_payload(payload: object) -> dict[str, object]:
     }
 
 
+def _start_sweep_job(payload: object) -> Job:
+    """Use the validated plan's canonical values; never parse its display command."""
+    plan = _sweep_plan_payload(payload)
+    source = plan["source"]
+    args = ["sweep", "--recipe" if source["kind"] == "recipe" else "--config", source["value"]]
+    for path, values in plan["matrix"].items():
+        args.extend(("--matrix", f"{path}={json.dumps(values, ensure_ascii=False, allow_nan=False)}"))
+    args.extend(("--seeds", *(str(seed) for seed in plan["seeds"])))
+    alias = str(payload.get("dataset_alias") or "").strip()
+    if alias:
+        args.extend(("--data", alias))
+    args.extend(("--output-dir", plan["root"]))
+    return _start_process("sweep", resolve_lnl_command() + args, shlex.join(["lnl", *args]))
+
+
 def _results_payload(path: str) -> dict[str, object]:
     from lnl_toolbox.training.results import discover_run_results
 
@@ -3688,7 +3703,7 @@ class ConsoleHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, {"error": f"dataset backend error: {exc}"}, 500)
             return
-        if path in {"/api/picker", "/api/sweep/plan"}:
+        if path in {"/api/picker", "/api/sweep/plan", "/api/sweep/run"}:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length) or b"{}")
@@ -3696,6 +3711,9 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                     if not ipaddress.ip_address(self.client_address[0]).is_loopback:
                         raise PermissionError("native path selection is limited to localhost")
                     value = _picker_payload(payload)
+                elif path == "/api/sweep/run":
+                    _json_response(self, _job_payload(_start_sweep_job(payload)), 202)
+                    return
                 else:
                     value = _sweep_plan_payload(payload)
                 _json_response(self, value)

@@ -822,6 +822,123 @@ def _invoke_cli(*arguments: str) -> tuple[int, str, str]:
 class _unified_cli_UnifiedCliTest(unittest.TestCase):
     invoke = staticmethod(_invoke_cli)
 
+    def test_nullable_sample_limits_reject_blanks_at_validation_only(self) -> None:
+        recipe = recipe_by_id('cifar10-smoke')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'local.yaml'
+            for limit in ('', '  ', None, 4):
+                config = load_recipe_config(recipe)
+                fields = ('max_train_samples', 'max_validation_samples', 'max_test_samples')
+                config['data'].update(dict.fromkeys(fields, limit))
+                path.write_text(yaml.safe_dump(config), encoding='utf-8')
+                code, _, error = self.invoke('validate', '--config', str(path))
+                with self.subTest(limit=limit):
+                    if isinstance(limit, str):
+                        self.assertEqual(code, 2)
+                        for field in fields:
+                            self.assertIn(f'data.{field}', error)
+                        self.assertIn('YAML null', error)
+                    else:
+                        self.assertEqual(code, 0, error)
+            for field in fields:
+                del config['data'][field]
+            path.write_text(yaml.safe_dump(config), encoding='utf-8')
+            self.assertEqual(self.invoke('validate', '--config', str(path))[0], 0)
+
+    def test_mentor_prepare_resolves_only_configured_paths_from_project_root(self) -> None:
+        from lnl_toolbox.training.mentor_learning import _mentor_data_config
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            root, cwd = base / 'project', base / 'different-cwd'
+            root.mkdir()
+            cwd.mkdir()
+            config_path = cwd / 'teacher.yaml'
+            for data, legacy, expected_root, expected_path in (
+                ({'root': 'nested', 'path': 'samples.csv'}, 'ignored', root / 'nested', root / 'samples.csv'),
+                ({'root': str(base / 'absolute'), 'path': str(base / 'absolute.csv')}, None, base / 'absolute', base / 'absolute.csv'),
+                ({}, 'legacy', root / 'legacy', None),
+                ({'root': None}, 'ignored', None, None),
+                ({}, None, None, None),
+            ):
+                with self.subTest(data=data, legacy=legacy):
+                    config = {'kind': 'mentor_artifact', 'data': data}
+                    if legacy is not None:
+                        config['data_root'] = legacy
+                    config_path.write_text(yaml.safe_dump(config), encoding='utf-8')
+                    previous = Path.cwd()
+                    try:
+                        os.chdir(cwd)
+                        with patch('lnl_toolbox.training.mentor_learning.prepare_trusted_mentor_features') as prepare:
+                            code, _, error = self.invoke(
+                                'mentor', 'prepare', '--config', 'teacher.yaml',
+                                '--project-root', str(root), '--output-dir', 'features',
+                            )
+                    finally:
+                        os.chdir(previous)
+                    self.assertEqual(code, 0, error)
+                    argument, output = prepare.call_args.args
+                    consumed = _mentor_data_config(argument, 1, 1, 0.4)['data']
+                    self.assertEqual(consumed.get('root'), str(expected_root) if expected_root else None)
+                    self.assertEqual(consumed.get('path'), str(expected_path) if expected_path else None)
+                    self.assertEqual(output, root / 'features')
+
+    def test_compose_update_specific_flags_are_applied_or_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for kind, accepted, rejected in (
+                ('cdr', ('--cdr-noise-rate', '0.4'), ('--gamma', '0.3')),
+                ('step_milestone', ('--milestones', '2', '--gamma', '0.3'), ('--l1-decay', '0.2')),
+            ):
+                with self.subTest(kind=kind):
+                    output = root / (kind + '.yaml')
+                    options = ('compose', 'create', '--base', 'cifar10-symmetric-cdr-smoke',
+                               '--output', str(output), '--parameter-update', kind, *accepted)
+                    code, _, error = self.invoke(*options, *rejected)
+                    self.assertEqual(code, 2)
+                    self.assertIn(rejected[0], error)
+                    self.assertFalse(output.exists())
+                    code, _, error = self.invoke(*options)
+                    self.assertEqual(code, 0, error)
+                    update = yaml.safe_load(output.read_text(encoding='utf-8'))['parameter_update']
+                    if kind == 'cdr':
+                        self.assertEqual((update['noise_rate'], update['l1_decay']), (0.4, 0.001))
+                    else:
+                        self.assertEqual((update['milestones'], update['gamma']), ([2], 0.3))
+
+    def test_paper_shared_variant_warns_without_changing_selected_output(self) -> None:
+        args = ('papers', 'config', 'gce', '--variant', 'cifar10-sym20', '--path-only')
+        code, output, error = self.invoke(*args)
+        explicit_code, explicit_output, explicit_error = self.invoke(*args, '--profile', 'smoke')
+        self.assertEqual((code, output), (explicit_code, explicit_output))
+        self.assertEqual(code, 0)
+        self.assertIn('gce_cifar10_noise02_smoke.yaml', output)
+        self.assertIn('reproduction, smoke', error)
+        self.assertIn('--profile', error)
+        self.assertEqual(explicit_error, '')
+
+    def test_sweep_json_stdout_is_one_document_for_plan_and_actual_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = ('sweep', '--recipe', 'importance-reweighting-binary-smoke', '--format', 'json')
+            code, output, error = self.invoke(*base, '--dry-run', '--no-check-data', '--matrix',
+                                              'trainer.epochs=[1]', '--output-dir', str(root / 'plan'))
+            self.assertEqual(code, 0, error)
+            plan = json.loads(output)
+            self.assertEqual(plan['matrix'], {'trainer.epochs': [1]})
+            self.assertEqual(plan['total'], 1)
+            self.assertFalse((root / 'plan').exists())
+            for epochs, failures in (('[1]', 0), ('[1,0]', 1)):
+                dest = root / ('mixed' if failures else 'success')
+                code, output, error = self.invoke(*base, '--matrix',
+                                                  f'trainer.epochs={epochs}', '--output-dir', str(dest))
+                self.assertEqual(code, failures, error)
+                result = json.loads(output)
+                self.assertEqual((result['completed'], result['failed']), (1, failures))
+                code, output, error = self.invoke('sweep', 'status', str(dest), '--format', 'json')
+                self.assertEqual(code, 0, error)
+                self.assertEqual(json.loads(output)['counts']['failed'], failures)
+
     def test_unified_mentor_commands_reuse_prepare_and_train_producers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

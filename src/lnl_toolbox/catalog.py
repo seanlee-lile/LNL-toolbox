@@ -934,6 +934,13 @@ def _config_parameter_errors(config: Mapping[str, Any]) -> list[str]:
     def fail(path: str, expected: str) -> None:
         errors.setdefault(path, f"invalid config for {path}, expected {expected}")
 
+    data = config.get("data")
+    if isinstance(data, Mapping):
+        for field in ("max_train_samples", "max_validation_samples", "max_test_samples"):
+            limit = data.get(field)
+            if isinstance(limit, str) and not limit.strip():
+                fail(f"data.{field}", "a sample limit or YAML null (not an empty string)")
+
     def walk(value: Mapping[str, Any], prefix: str = "") -> None:
         for key, current in value.items():
             path = f"{prefix}.{key}" if prefix else str(key)

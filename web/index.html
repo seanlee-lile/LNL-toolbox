@@ -1586,7 +1586,8 @@
         field("输出目录", "sweep-output", pathControl("__ID__", state.sweepOutput || "artifacts/web-sweep"), true) +
         '<div class="wide workflow-actions"><button id="sweep-load-source" type="button" class="primary">加载当前配置参数</button><button id="sweep-edit-source" type="button" class="secondary">编辑当前配置</button><button id="sweep-open-results" type="button" class="secondary">查看此参数组合实验的运行结果</button>' + quick + '</div>' +
         '<div class="wide"><strong>已选参数维度</strong><div id="sweep-dimensions">' + rows + '</div></div>' + commonFormEnd() +
-        '<div id="sweep-parameter-library"><strong>参数用途与分类</strong>' + sweepGroupsHtml(schema) + '</div><div id="sweep-plan-view" class="structured-output"></div>';
+        '<div id="sweep-parameter-library"><strong>参数用途与分类</strong>' + sweepGroupsHtml(schema) + '</div><div id="sweep-plan-view" class="structured-output"></div>' +
+        '<p class="helper">自动提交使用表单参数；复制的命令使用 Bash 等 POSIX shell 的引号。</p>';
       document.getElementById("sweep-dataset").value = state.sweepDataset;
       document.getElementById("sweep-load-source").addEventListener("click", function () { captureSweepValues(); state.sweepSchema = null; state.sweepRows = []; state.sweepPlan = null; loadSweepSchema(); });
       parameterPanel.querySelectorAll("[data-sweep-add]").forEach(function (button) {
@@ -1641,28 +1642,32 @@
       delete matrix.seed;
       return {matrix:matrix, seeds:seeds};
     }
-    function buildSweepCommand() {
+    function sweepRequest() {
       const source = currentSweepSource();
-      if (!source.value) return "";
-      let sweep;
-      try { sweep = collectSweepExecutionSpec(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return ""; }
-      let command = "lnl sweep --" + (source.kind === "path" ? "config " : "recipe ") + quoteArg(source.value);
-      Object.entries(sweep.matrix).forEach(function (entry) { command += " --matrix " + quoteArg(entry[0] + "=" + JSON.stringify(entry[1])); });
-      if (sweep.seeds) command += " --seeds " + sweep.seeds.join(" ");
-      if (state.sweepDataset) command += " --data " + quoteArg(state.sweepDataset);
-      command += " --output-dir " + quoteArg(selectValue("sweep-output", "artifacts/web-sweep"));
-      return command;
+      if (!source.value) return null;
+      const sweep = collectSweepExecutionSpec();
+      const request = {matrix:sweep.matrix, output_dir:selectValue("sweep-output", "artifacts/web-sweep").trim() || "artifacts/web-sweep"};
+      if (sweep.seeds) request.seeds = sweep.seeds;
+      if (state.sweepDataset) request.dataset_alias = state.sweepDataset;
+      request[source.kind] = source.value;
+      return request;
     }
-    async function previewSweepPlan() {
-      let sweep;
-      try { sweep = collectSweepExecutionSpec(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return false; }
-      const source = currentSweepSource();
-      const requestBody = {matrix:sweep.matrix, output_dir:selectValue("sweep-output")};
-      if (sweep.seeds) requestBody.seeds = sweep.seeds;
-      if (state.sweepDataset) requestBody.dataset_alias = state.sweepDataset;
-      requestBody[source.kind] = source.value;
+    function buildSweepCommand() {
+      let spec;
+      try { spec = sweepRequest(); } catch (error) { statusNode.textContent = error.message; statusNode.className = "status failed"; return ""; }
+      if (!spec) return "";
+      // POSIX shell display only. Automatic submission uses the typed spec.
+      const quote = value => "'" + String(value).replaceAll("'", "'\"'\"'") + "'";
+      let command = "lnl sweep --" + (spec.path ? "config " + quote(spec.path) : "recipe " + quote(spec.recipe));
+      Object.entries(spec.matrix).forEach(function (entry) { command += " --matrix " + quote(entry[0] + "=" + JSON.stringify(entry[1])); });
+      if (spec.seeds) command += " --seeds " + spec.seeds.map(quote).join(" ");
+      if (spec.dataset_alias) command += " --data " + quote(spec.dataset_alias);
+      return command + " --output-dir " + quote(spec.output_dir);
+    }
+    async function previewSweepPlan(requestBody) {
       const response = await fetch("/api/sweep/plan", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(requestBody)});
       const payload = await response.json();
+      if (state.module !== "sweep" || state.previewEdited || JSON.stringify(sweepRequest()) !== JSON.stringify(requestBody)) return false;
       if (!response.ok) { statusNode.textContent = payload.error || "参数组合实验预检失败"; statusNode.className = "status failed"; return false; }
       state.sweepPlan = payload;
       const rows = payload.runs.map(function (run) { return {run:run.run_id, seed:run.seed, parameters:Object.entries(run.overrides).map(function (entry) { return entry[0] + "=" + JSON.stringify(entry[1]); }).join("; ") || "-"}; });
@@ -2762,7 +2767,7 @@
     });
     runButton.addEventListener("click", async function () {
       if (!state.request) return;
-      if (state.module === "sweep" && !(await previewSweepPlan())) return;
+      let autoSweep = null;
       if (state.module === "beginner" && !state.tutorialQuickMode) {
         const step = (state.tutorial.steps || [])[state.tutorialStep];
         state.tutorialRunningStep = step ? step.id : "";
@@ -2785,18 +2790,23 @@
         statusNode.className = "status failed";
         return;
       }
-      runButton.disabled = true; outputNode.textContent = "正在执行，请稍候...";
-      const endpoint = state.request.dataset ? "/api/datasets" : "/api/run";
-      const body = state.request.dataset || state.request;
-      if (
-        state.module === "yaml" &&
-        !state.request.dataset &&
-        typeof body.command === "string" &&
-        body.command.startsWith("lnl compose create ")
-      ) {
-        state.pendingYamlPath = state.yamlDestinationPath || defaultCustomYamlPath(currentYamlBuilderRecipe());
-      }
+      runButton.disabled = true;
       try {
+        if (state.module === "sweep" && !state.previewEdited) {
+          autoSweep = sweepRequest();
+          if (!autoSweep || !(await previewSweepPlan(autoSweep))) return;
+        }
+        const endpoint = autoSweep ? "/api/sweep/run" : state.request.dataset ? "/api/datasets" : "/api/run";
+        const body = autoSweep || state.request.dataset || state.request;
+        if (
+          state.module === "yaml" &&
+          !state.request.dataset &&
+          typeof body.command === "string" &&
+          body.command.startsWith("lnl compose create ")
+        ) {
+          state.pendingYamlPath = state.yamlDestinationPath || defaultCustomYamlPath(currentYamlBuilderRecipe());
+        }
+        outputNode.textContent = "正在执行，请稍候...";
         const response = await fetch(endpoint, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
         let result;
         try { result = await response.json(); } catch (_error) { throw new Error("后端连接中断，未返回可读错误。请检查 Web 服务终端。 "); }

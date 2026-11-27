@@ -638,6 +638,67 @@ eval(quote + workflow + 'console.log(compatibilityWorkflowCommand("run"));');
         self.assertEqual(payload["source"]["kind"], "recipe")
         self.assertTrue(payload["matrix_fields"])
 
+    def test_structured_sweep_http_submit_preserves_typed_plan_in_real_cli(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory(dir=command_console.ROOT) as directory:
+            root = Path(directory)
+            source = root / "custom config.yaml"
+            cfg = command_console._config_payload("gce-cifar10-noise02-reproduction")["config"]
+            cfg["data"]["root"] = str(root / "deliberately-missing-data")
+            source.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+            output = root / "sweep output"
+            spec = {
+                "path": source.relative_to(command_console.ROOT).as_posix(),
+                "matrix": {"data.name": ["animal10n"], "loader.batch_size": [16]},
+                "seeds": [22], "output_dir": str(output),
+            }
+            with command_console.ThreadingHTTPServer(
+                ("127.0.0.1", 0), command_console.ConsoleHandler,
+            ) as server:
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                base = f"http://127.0.0.1:{server.server_port}"
+
+                def post(endpoint, body):
+                    req = request.Request(base + endpoint, json.dumps(body).encode(),
+                                          {"Content-Type": "application/json"})
+                    with request.urlopen(req, timeout=25) as response:
+                        return response.status, json.load(response)
+
+                try:
+                    with self.assertRaises(error.HTTPError) as rejected:
+                        post("/api/sweep/run", dict(spec, matrix={"data.name": [5]}))
+                    self.assertEqual(rejected.exception.code, 400)
+                    self.assertFalse(output.exists())
+                    status, plan = post("/api/sweep/plan", spec)
+                    self.assertEqual(status, 200)
+                    status, queued = post("/api/sweep/run", spec)
+                    self.assertEqual(status, 202)
+                    deadline = time.monotonic() + 30
+                    while time.monotonic() < deadline:
+                        with request.urlopen(base + "/api/jobs/" + queued["id"], timeout=10) as response:
+                            job = json.load(response)
+                        if job["output_complete"]:
+                            break
+                        time.sleep(0.05)
+                    else:
+                        self.fail("sweep CLI did not finish")
+                    self.assertEqual(job["returncode"], 1, job["lines"])
+                    self.assertIn("completed=0 skipped=0 failed=1", job["lines"])
+                    manifest = json.loads((output / "sweep_manifest.json").read_text(encoding="utf-8"))
+                    self.assertEqual(
+                        [(row["run_id"], row["seed"], row["overrides"]) for row in manifest["runs"]],
+                        [(row["run_id"], row["seed"], row["overrides"]) for row in plan["runs"]],
+                    )
+                    self.assertEqual(manifest["runs"][0]["overrides"], {
+                        "data.name": "animal10n", "loader.batch_size": 16,
+                    })
+                    self.assertEqual(manifest["runs"][0]["status"], "failed")
+                finally:
+                    server.shutdown()
+                    thread.join(timeout=5)
+
     def test_sweep_plan_accepts_project_yaml_and_reports_paper_deviation(self):
         source = command_console._config_payload(
             "gce-cifar10-noise02-reproduction"

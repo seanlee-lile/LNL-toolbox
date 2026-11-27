@@ -143,6 +143,19 @@ def apply_overrides(
         raise ValueError("--keep-rate requires --selector small_loss")
 
     if parameter_update is not None:
+        supplied = {
+            "--milestones": milestones, "--gamma": gamma,
+            "--cdr-noise-rate": cdr_noise_rate, "--l1-decay": l1_decay,
+        }
+        applicable = {
+            "step_milestone": {"--milestones", "--gamma"},
+            "cdr": {"--cdr-noise-rate", "--l1-decay"},
+            "standard": set(),
+        }
+        ignored = [flag for flag, value in supplied.items()
+                   if value is not None and flag not in applicable.get(parameter_update, ())]
+        if ignored:
+            raise ValueError(f"{', '.join(ignored)} not applicable to parameter_update={parameter_update}")
         if parameter_update == "step_milestone":
             if not milestones:
                 raise ValueError(
@@ -169,10 +182,6 @@ def apply_overrides(
             }
             result["parameter_update"] = update
         else:
-            if any(value is not None for value in (milestones, gamma, cdr_noise_rate, l1_decay)):
-                raise ValueError(
-                    "update-specific options do not apply to parameter_update=standard"
-                )
             result["parameter_update"] = {"name": "standard"}
     elif any(value is not None for value in (milestones, gamma, cdr_noise_rate, l1_decay)):
         raise ValueError("update-specific options require --parameter-update")

@@ -3,6 +3,7 @@ from __future__ import annotations
 """Unified, discoverable command-line interface for toolbox users."""
 
 import argparse
+from contextlib import nullcontext, redirect_stdout
 from importlib import metadata
 import json
 from pathlib import Path
@@ -290,7 +291,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sweep.add_argument("--output-dir", type=Path)
     sweep.add_argument("--dry-run", action="store_true")
-    sweep.add_argument("--format", choices=("human", "json"), default="human")
+    sweep.add_argument(
+        "--format", choices=("human", "json"), default="human",
+        help="output format for plan, execution summary or status (JSON mode sends progress to stderr)",
+    )
     sweep.add_argument(
         "--no-check-data",
         action="store_true",
@@ -718,6 +722,39 @@ def _sweep(args: argparse.Namespace) -> int:
         return 0
     if args.status_path is not None:
         raise ValueError("unexpected extra sweep path; use 'lnl sweep status <path>'")
+    machine = args.format == "json"
+    with redirect_stdout(sys.stderr) if machine else nullcontext():
+        plan, result = _execute_sweep(args)
+    if args.dry_run:
+        if machine:
+            print(json.dumps({
+                "root": str(plan.root),
+                "recipe": plan.recipe,
+                "seeds": list(plan.seeds),
+                "matrix": dict(plan.matrix),
+                "base_config_hash": plan.base_config_hash,
+                "sweep_hash": plan.sweep_hash,
+                "total": len(plan.runs),
+                "runs": [{
+                    "run_id": member.run_id, "seed": member.seed,
+                    "overrides": member.override_mapping, "config_hash": member.config_hash,
+                } for member in plan.runs],
+            }, ensure_ascii=False))
+        else:
+            _print_sweep_plan(plan)
+        return 0
+    if machine:
+        print(json.dumps({
+            "root": str(result.root),
+            "completed": result.completed, "skipped": result.skipped, "failed": result.failed,
+        }, ensure_ascii=False))
+    else:
+        print(f"sweep: {result.root}")
+        print(f"completed={result.completed} skipped={result.skipped} failed={result.failed}")
+    return 1 if result.failed else 0
+
+
+def _execute_sweep(args: argparse.Namespace):
     config, _path, recipe, _project, seeds, matrix = _load_sweep_source(args)
     cli_matrix = _parse_sweep_matrix(args.matrix)
     duplicates = sorted(set(matrix).intersection(cli_matrix))
@@ -743,8 +780,7 @@ def _sweep(args: argparse.Namespace) -> int:
                 resolve_planned_config(config, planned),
                 check_data=not args.no_check_data,
             )
-        _print_sweep_plan(plan)
-        return 0
+        return plan, None
     result = run_sweep(
         config,
         seeds,
@@ -753,11 +789,7 @@ def _sweep(args: argparse.Namespace) -> int:
         recipe=recipe.id if recipe is not None else None,
         service=service,
     )
-    print(f"sweep: {result.root}")
-    print(
-        f"completed={result.completed} skipped={result.skipped} failed={result.failed}"
-    )
-    return 1 if result.failed else 0
+    return plan, result
 
 
 def _load_sweep_source(args: argparse.Namespace):
@@ -1053,9 +1085,17 @@ def _paper_show(paper: PaperSpec) -> int:
 def _paper_config(args: argparse.Namespace) -> int:
     root = args.project_root.expanduser().resolve() if args.project_root else None
     paper = paper_by_id(args.paper_id, root)
-    _selection, recipe = select_paper_config(
+    selection, recipe = select_paper_config(
         paper, profile=args.profile, variant=args.variant, root=root
     )
+    if args.variant and not args.profile:
+        profiles = sorted({item.profile for item in paper.configs if item.variant == args.variant})
+        if len(profiles) > 1:
+            print(
+                f"Warning: variant {args.variant!r} matches profiles {', '.join(profiles)}; "
+                f"selected {selection.profile} ({recipe.id}). Pass --profile explicitly.",
+                file=sys.stderr,
+            )
     if args.path_only:
         print(recipe.config_path)
         return 0
@@ -1448,9 +1488,23 @@ def _mentor_command(args: argparse.Namespace) -> int:
     config_path = args.config.expanduser().resolve()
     if not config_path.is_file():
         raise FileNotFoundError(f"Mentor configuration does not exist: {config_path}")
-    config = load_yaml(config_path)
     if args.mentor_command == "prepare":
-        config = apply_override_assignments(config, args.overrides)
+        import yaml
+        from lnl_toolbox.core.config_schema import normalize_experiment_config
+
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError(f"configuration must contain a YAML mapping: {config_path}")
+        # The preparation consumer supports legacy data_root, but the canonical
+        # producer schema only accepts data.root. Scope the alias to prepare.
+        if "data_root" in raw:
+            legacy_root = raw.pop("data_root")
+            if legacy_root is not None:
+                data = raw.setdefault("data", {})
+                if isinstance(data, dict):
+                    data.setdefault("root", legacy_root)
+        config = normalize_experiment_config(raw)
+        config = resolve_config_paths(apply_override_assignments(config, args.overrides), root)
         from lnl_toolbox.training.mentor_learning import (
             prepare_trusted_mentor_features,
         )
@@ -1463,7 +1517,7 @@ def _mentor_command(args: argparse.Namespace) -> int:
         print(feature_path)
         return 0
     if args.mentor_command == "train":
-        config = apply_override_assignments(config, args.overrides)
+        config = apply_override_assignments(load_yaml(config_path), args.overrides)
         from lnl_toolbox.training.mentor_learning import train_mentor_artifact
 
         feature_data = Path(str(config.get("feature_data", ""))).expanduser()
